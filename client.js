@@ -7,7 +7,7 @@
  * 应用里的 fetch('/qip-real-v3/api/...')、SSE、文件下载都按浏览器同源正常工作。
  */
 window.__ModuleLoader__.load({
-  id: 'qip-real-v3',
+  id: 'dsh-total-quality-v3',
   factory: (require) => {
     const React = require('react')
     const h = React.createElement

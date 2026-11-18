@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.2
+
+### Fixed
+- 客户端模块按包名 dsh-total-quality-v3 注册，保留 qip-real-v3 侧栏 / 页面标识，修复原生 Harness 启动时无法导入客户端入口的问题。
+
 ## 3.0.1
 
 ### Fixed

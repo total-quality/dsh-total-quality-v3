@@ -9,6 +9,17 @@ const { Store } = require('../src/lib/store');
 const { createEngine, parseCsv } = require('../src/lib/operations');
 const Business = require('../src/lib/business');
 
+test('the Harness client registers its package name while retaining the independent sidebar id', () => {
+  const vm = require('node:vm'); let registration;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../client.js'), 'utf8'), { fetch: async () => ({ json: async () => ({}) }), window: { __ModuleLoader__: { load(value) { registration = value; } } } });
+  assert.equal(registration.id, require('../package.json').name);
+  const plugin = registration.factory(() => ({ createElement() {} }));
+  const slots = [];
+  plugin.apply({ slots: { inject(name, fn) { fn(); }, register(row) { slots.push(row); } } });
+  assert.equal(slots.find((s) => s.name === 'sidebar.panellist').id, 'qip-real-v3');
+  assert.equal(slots.find((s) => s.name === 'sidebar.panellist').label(), '全质开源质量平台2');
+});
+
 async function fixture(t, runtime = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'total-v3-test-'));
   const store = new Store(); await store.init(dir, { scale: 'sme' });
