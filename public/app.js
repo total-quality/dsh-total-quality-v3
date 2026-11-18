@@ -514,7 +514,7 @@ global.Scale = {
                  <span class="big">📱 可以手机拍拍拍导入问题</span>
                  <span class="imp-sub">批量时也可直接用 Excel / CSV 一键导入，表头写「问题描述、产品、车间、工位、来源、等级、责任人」即可。</span>
                </div>`,
-        footer: `${act('取消', '__closeModal', {}, 'btn')}${act('📥 导入问题（Excel / CSV）', 'importFile', { target: 'issues' }, 'btn')}${act('保存并查重', 'issueCreate', {}, 'btn btn-primary')}`,
+        footer: `${act('取消', '__closeModal', {}, 'btn')}${act('导入问题（Excel / CSV）', 'importFile', { target: 'issues' }, 'btn')}${act('保存并查重', 'issueCreate', {}, 'btn btn-primary')}`,
       });
     },
     issueCreate: async () => {
@@ -769,7 +769,7 @@ global.Scale = {
         modal({
           width: 'narrow', title: '✅ 报告已生成', sub: res.报告标题,
           body: infoGrid([['报告编号', res.报告编号], ['格式', res.格式], ['文件大小', res.文件大小], ['章节', (res.章节 || []).join(' / '), true], ['内容摘要', esc(res.内容摘要 || ''), true]]) +
-            `<div style="margin-top:12px;"><a class="btn btn-primary" href="${esc(res.下载链接)}">⬇ 下载 Word 文档</a></div>`,
+            `<div style="margin-top:12px;"><a class="btn btn-primary" href="${esc(res.下载链接)}">下载 Word 文档</a></div>`,
           footer: `${act('关闭', '__closeModal', {}, 'btn')}`,
         });
         refresh();

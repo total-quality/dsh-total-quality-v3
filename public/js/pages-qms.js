@@ -127,13 +127,13 @@
       '<div style="margin-top:14px;">' +
         card('增加信息', '把平台还不知道的情况写成一段话，让 AI 判断该改什么',
           input('nmNote', noteText, { type: 'textarea', rows: 3, placeholder: '例如：我们有两个厂区，一厂冲压、二厂装配；产品分内销与出口两条线，希望问题库里能区分。' }) +
-          '<div class="act-bar" style="margin-top:10px;">' + act('🤖 让 AI 判断如何调整', 'aiNaming', {}, 'btn btn-ai') +
+          '<div class="act-bar" style="margin-top:10px;">' + act('让 AI 判断如何调整', 'aiNaming', {}, 'btn btn-ai') +
           '<span style="font-size:11.5px;color:#8791a5;">AI 只给「建议改法」，您看过之后点「填入表单」再保存才会真正改数据。</span></div>' +
           (noteText ? '<div class="tips-line">上次保存的说明：' + esc(String(noteText).slice(0, 160)) + '</div>' : '')) +
       '</div>' +
       '<div class="act-bar" style="margin-top:14px;">' +
-        act('💾 保存并应用到数据', 'saveNaming', {}, 'btn btn-primary') +
-        act('↩️ 恢复默认名称', 'resetNaming', {}, 'btn') +
+        act('保存并应用到数据', 'saveNaming', {}, 'btn btn-primary') +
+        act('恢复默认名称', 'resetNaming', {}, 'btn') +
         '<span style="font-size:11.5px;color:#8791a5;">保存后可随时改回。</span>' +
       '</div>' +
       '<div style="height:14px;"></div>';
@@ -213,7 +213,7 @@
         </div>
       </div>
       <div class="act-bar">
-        ${act('💾 暂存草稿', 'qmsDraft', {}, 'btn')}
+        ${act('暂存草稿', 'qmsDraft', {}, 'btn')}
         ${act('✓ 填写完毕，去生成手册', 'qmsComplete', { go: 'qmsManual' }, 'btn btn-primary')}
         ${act('前往「一键生成程序文件」', 'goto', { page: 'qmsProc' }, 'btn')}
       </div>

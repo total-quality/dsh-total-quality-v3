@@ -87,7 +87,7 @@
         `<div class="form-row"><div class="fl">当前模型<small>插件默认锁定 DeepSeek-V4.1-Flash；不可用时自动回落 Harness 当前模型，也可用环境变量 QIP_LLM_MODEL 覆盖</small></div><div class="fc"><b>${esc(llm.modelLabel || '未连接')}</b></div></div>
         <div class="form-row"><div class="fl">调用链路<small>真实模型调用，不是预设话术</small></div><div class="fc"><code>页面 → 插件 Host 半 → ctx.llm → ${esc(llm.provider || 'DeepSeek')} / ${esc(llm.model || '')}</code></div></div>
         <div class="form-row"><div class="fl">说明</div><div class="fc" style="color:#5e6b85;line-height:1.9;">${esc(llm.description || '')}<br>本插件不需要单独填写 API Key 或 Base URL：模型接入、密钥与账号统一由 Harness 管理，插件只负责调用。</div></div>
-        <div style="margin-top:12px;display:flex;gap:8px;">${act('🔌 测试连通性（真实调用一次模型）', 'testLlm', {}, 'btn btn-ai')}</div>
+        <div style="margin-top:12px;display:flex;gap:8px;">${act('测试连通性（真实调用一次模型）', 'testLlm', {}, 'btn btn-ai')}</div>
         ${SetState.testing ? '<div class="test-steps"><div class="empty"><span class="spin"></span>　正在测试（会真实调用模型，约 5~20 秒）…</div></div>' : ''}
         ${SetState.steps ? '<div class="test-steps">' + SetState.steps.map((st) => `<div class="test-step"><span class="${st.ok ? 'ts-ok' : 'ts-fail'}">${st.ok ? '✓' : '✗'}</span><div><b>${esc(st.name)}</b><div style="color:#5e6b85;margin-top:2px;">${esc(st.detail)}</div><div style="color:#8791a5;font-size:11px;">${st.ms}ms</div></div></div>`).join('') + '</div>' : ''}`)}
 
@@ -104,7 +104,7 @@
           判异预警：<b>ABC 级质量问题实时推送</b><br>
           报告草稿默认汇报：<b>质量部部长</b>
         </div></div>
-        <div style="margin-top:12px;">${act('💾 保存护栏设置', 'saveSettings', { section: 'agent' }, 'btn btn-primary')}</div>`)}
+        <div style="margin-top:12px;">${act('保存护栏设置', 'saveSettings', { section: 'agent' }, 'btn btn-primary')}</div>`)}
 
       ${card('③ 插件总线配置', '本地数据仓 ↔ HTTP 直连 可切换',
         table(['插件', '说明', '模式', '启用', '接口地址', ''],
@@ -128,13 +128,13 @@
           <b>表行数：</b>${Object.entries(dbStatus.tables || {}).map(([k, v]) => k + ' ' + v).join(' · ')}　（另有 JSON 快照用于备份）
         </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-          ${act('📥 导入 Excel / CSV（测量数据）', 'importFile', { target: 'measurements' }, 'btn btn-primary')}
-          ${act('📥 导入问题清单', 'importFile', { target: 'issues' }, 'btn')}
-          ${act('📥 导入 AI 质检缺陷', 'importFile', { target: 'defects' }, 'btn')}
+          ${act('导入 Excel / CSV（测量数据）', 'importFile', { target: 'measurements' }, 'btn btn-primary')}
+          ${act('导入问题清单', 'importFile', { target: 'issues' }, 'btn')}
+          ${act('导入 AI 质检缺陷', 'importFile', { target: 'defects' }, 'btn')}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${act('🔄 重建初始数据', 'resetData', {}, 'btn')}
-          ${act('🧹 清空业务数据（保留模型配置）', 'clearData', {}, 'btn')}
+          ${act('重建初始数据', 'resetData', {}, 'btn')}
+          ${act('清空业务数据（保留模型配置）', 'clearData', {}, 'btn')}
         </div>
         <div style="font-size:11.5px;color:#8791a5;margin-top:10px;line-height:1.9;">
           <b>导入格式说明：</b>Excel 第一行为表头，平台会自动识别中文/英文字段名（如「时间/测量值/特性编号/产品/车间/批号/供应商/班次/操作者/VIN」）。

@@ -19,7 +19,6 @@ a { color:#1a56db; text-decoration:none; }
 .nav-item { display:flex; align-items:center; gap:7px; padding:8px 14px; border-radius:9px; cursor:pointer; color:#44506b; font-size:13.5px; white-space:nowrap; line-height:1.4; transition:background .15s,color .15s; }
 .nav-item:hover { background:#f2f4f8; color:#1a2233; }
 .nav-item.active { background:#e8f0ff; color:#1a56db; font-weight:600; }
-.nav-item .ico { font-size:14px; }
 .nav-menu { position:relative; }
 .nav-parent .caret { font-size:0; line-height:0; width:0; height:0; border-left:4px solid transparent; border-right:4px solid transparent; border-top:5px solid #9aa3b2; margin-left:4px; transition:transform .15s, border-top-color .15s; }
 .nav-menu.open > .nav-parent .caret { transform:rotate(180deg); border-top-color:#1a2233; }
@@ -52,7 +51,6 @@ a { color:#1a56db; text-decoration:none; }
 .topbar-sub { font-size:11px; color:#8791a5; }
 .searchbox { margin-left:auto; flex:0 1 360px; min-width:150px; background:#f2f4f8; border-radius:6px; padding:7px 12px; color:#8791a5; font-size:12px; display:flex; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; overflow:hidden; }
 .searchbox:hover { background:#e9edf5; }
-.searchbox .ic { flex-shrink:0; }
 .searchbox .tx { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .ai-btn { background:linear-gradient(90deg,#7a5af8,#1a56db); color:#fff; border-radius:6px; padding:7px 14px; font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; white-space:nowrap; }
 .qt-btn { background:#fff; color:#33415c; border:1px solid #dde2ec; border-radius:6px; padding:6px 12px; font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; flex-shrink:0; }
@@ -321,7 +319,6 @@ select.inp { background:#fff; }
 .qt-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(214px,1fr)); gap:6px 10px; }
 .qt-item { display:flex; align-items:center; gap:7px; font-size:11.5px; color:#33415c; background:#f8fafc; border:1px solid #eef1f6; border-radius:6px; padding:6px 8px; cursor:pointer; transition:all .13s; }
 .qt-item:hover { border-color:#1a56db; background:#e4edff; color:#0b3ea8; }
-.qt-ico { width:18px; flex:0 0 18px; text-align:center; font-size:13px; line-height:1; }
 .qt-nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .qt-sum { flex:0 0 auto; font-size:10px; font-weight:700; color:#1a56db; background:#e8f0ff; border-radius:4px; padding:1px 4px; }
 .qt-foot { font-size:11px; color:#8791a5; margin-top:8px; text-align:center; }

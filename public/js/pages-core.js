@@ -58,8 +58,8 @@
             <span class="t">对话式改进工作台</span>
             <span class="s" id="chatMeta">${Chat.messages.length ? Chat.messages.length + ' 条消息' : '新会话'}</span>
             <span style="margin-left:auto;display:flex;gap:6px;">
-              ${act('🗑 清空', 'chatClear', {}, 'btn btn-sm')}
-              ${act('📂 历史', 'chatHistory', {}, 'btn btn-sm')}
+              ${act('清空', 'chatClear', {}, 'btn btn-sm')}
+              ${act('历史', 'chatHistory', {}, 'btn btn-sm')}
             </span>
           </div>
           <div class="chat-body" id="chatBody"></div>
@@ -72,7 +72,7 @@
               <span class="quick-cmd" data-act="quickAsk" data-args='${esc(JSON.stringify({ q: '扫描当前质量风险并给出今天最该处理的 3 件事' }))}'>风险扫描＋今日重点</span>
               <span class="spacer"></span>
               <span id="chatState" style="font-size:11px;color:#8791a5;"></span>
-              ${act('⏹ 停止', 'chatStop', {}, 'btn btn-sm')}
+              ${act('停止', 'chatStop', {}, 'btn btn-sm')}
               ${act('发送', 'chatSend', {}, 'btn btn-primary')}
             </div>
           </div>
@@ -168,7 +168,7 @@
       <div class="imp-hint">
         <span class="big">📱 可以手机拍拍拍导入问题</span>
         <span class="imp-sub">现场拿手机拍照片/拍视频，顺手说一句现象，AI 自动识别并录入；也支持直接导入 Excel / CSV 问题清单。</span>
-        ${act('📥 导入问题（Excel / CSV）', 'importFile', { target: 'issues' }, 'btn btn-primary btn-sm')}
+        ${act('导入问题（Excel / CSV）', 'importFile', { target: 'issues' }, 'btn btn-primary btn-sm')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">
         ${kpi({ ico: '📋', label: '问题总数', value: rows.length, delta: '本月新增 ' + rows.filter((r) => (r.createdAt || '').slice(0, 7) === new Date().toISOString().slice(0, 7)).length, act: 'filterIssues', args: {} })}

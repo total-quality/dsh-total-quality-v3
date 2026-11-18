@@ -169,7 +169,7 @@
 
   /** 结果区底部的两个动作按钮 */
   function resultTail(tool, args) {
-    return `<div style="margin-top:12px;display:flex;gap:8px;">${act('让 AI 解读这个结果', 'wzInterpret', { tool: tool, args: JSON.stringify(args).slice(0, 1500) }, 'btn btn-ai')}${act('⬇ 下载结果 CSV', 'wzExport', {}, 'btn')}</div>`;
+    return `<div style="margin-top:12px;display:flex;gap:8px;">${act('让 AI 解读这个结果', 'wzInterpret', { tool: tool, args: JSON.stringify(args).slice(0, 1500) }, 'btn btn-ai')}${act('下载结果 CSV', 'wzExport', {}, 'btn')}</div>`;
   }
 
   /* ---------------- 结果导出 ---------------- */
@@ -330,7 +330,7 @@
         return `<div class="form-row"><div class="fl">${esc(f.label)}${f.required ? ' <span style="color:#e5484d;">*</span>' : ''}</div><div class="fc">${ctrl}</div></div>`;
       }).join('');
     modal({
-      width: 'wide', title: '🧰 ' + w.title, sub: brand() + ' · 质量工具',
+      width: 'wide', title: w.title, sub: brand() + ' · 质量工具',
       body: `<div id="wzForm">${body}</div><div id="wzResult" style="margin-top:16px;"></div>`,
       footer: `${act('关闭', '__closeModal', {}, 'btn')}${act('使用 AI 智能体完成', 'wzAi', { key }, 'btn')}${act('▶ 计算', 'wzRun', { key }, 'btn btn-primary')}`,
     });
@@ -461,23 +461,6 @@
     return String(s || '').split(/[\s,，;；\n\t]+/).map((x) => Number(x)).filter((x) => Number.isFinite(x));
   }
 
-  // 每个 skill 一个独立图标（按名称关键字匹配，避免全部用同一个机器人脸）
-  // 顺序即优先级：长词/专有词写在前面，避免「因果图根因分析」被「根因」先匹配
-  const ICON_RULES = [
-    [/8D/, '🎯'], [/FMEA|失效模式/, '⚠️'], [/标准条款|条款检索/, '📖'], [/海龟/, '🐢'], [/质量成本/, '💰'],
-    [/甘特/, '📅'], [/过程能力|Cpk|Ppk/, '📐'], [/人机料法环|4M/, '🧩'], [/变化点/, '🔄'], [/5W2H/, '🧾'],
-    [/因果图|鱼骨/, '🐟'], [/5Why|根因/, '❓'], [/假设检验/, '⚖️'], [/方差/, '📊'], [/回归/, '📈'],
-    [/检查表/, '✅'], [/分层/, '🗂️'], [/排列图|帕累托/, '📶'], [/直方图/, '🔔'], [/控制图|SPC/, '📉'],
-    [/散点/, '✳️'], [/关联图/, '🕸️'], [/系统图/, '🌳'], [/矩阵数据分析/, '🧮'], [/矩阵图/, '▦'],
-    [/PDPC/, '🚦'], [/箭条/, '🏹'], [/KJ/, '🗃️'], [/DMAIC|六西格玛/, '🌀'], [/GR&R|GRR/, '📏'],
-    [/MSA|偏倚|线性|稳定性/, '🎚️'], [/GD&T|几何尺寸|形位公差/, '🔧'], [/QFD|质量功能展开|质量屋/, '🏠'], [/DOE|试验设计/, '🧬'],
-  ];
-  function iconFor(name) {
-    const n = String(name || '');
-    for (const [re, ico] of ICON_RULES) if (re.test(n)) return ico;
-    return '🧰';
-  }
-
   // 两套版式提供同一套工具（34 项），不做删减、也不打角标
   function menuItems() {
     return [].concat(QTools.col1 || [], QTools.col2 || [], QTools.col3 || []);
@@ -487,7 +470,7 @@
     const el = document.getElementById('qtGrid');
     if (!el) return;
     const items = menuItems();
-    el.innerHTML = items.map((t) => `<div class="qt-item" data-act="qtPick" data-args='${esc(JSON.stringify(t))}' title="${esc(t.name)}"><span class="qt-ico">${iconFor(t.name)}</span><span class="qt-nm">${esc(t.name)}</span>${t.w ? '<span class="qt-sum">∑</span>' : ''}</div>`).join('')
+    el.innerHTML = items.map((t) => `<div class="qt-item" data-act="qtPick" data-args='${esc(JSON.stringify(t))}' title="${esc(t.name)}"><span class="qt-nm">${esc(t.name)}</span>${t.w ? '<span class="qt-sum">∑</span>' : ''}</div>`).join('')
       + (items.length ? '' : '<div class="empty">当前版式无可用工具</div>');
   }
 

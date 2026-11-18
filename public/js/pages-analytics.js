@@ -37,7 +37,7 @@
         ${card('车间语音报问题', '自然语言 → 结构化问题单',
           `<div style="font-size:12.5px;color:#5e6b85;line-height:1.9;margin-bottom:10px;">现场只需一句话，AI 自动识别<b>产品 / 车间 / 工位 / 缺陷类别 / 等级</b>，回填 MES 工位批次，并匹配相似历史案例。例如：<br>
             <span style="color:#1a56db;">「四车间三线右后门关门声发闷，连续第三台」</span></div>
-          ${act('🎤 试一条（预置话术）', 'voiceReport', { text: '四车间三线右后门关门声发闷，连续第三台' }, 'btn btn-ai')}
+          ${act('试一条（预置话术）', 'voiceReport', { text: '四车间三线右后门关门声发闷，连续第三台' }, 'btn btn-ai')}
           ${act('输入自定义描述', 'voiceReport', {}, 'btn')}`)}
         ${card('QRQC 有效性指标', '真实统计',
           infoGrid([
@@ -245,7 +245,7 @@
         table(['编号', '类型', '标题', '期间', '格式', '大小', '状态', '生成时间', ''],
           rows.map((r) => ({
             cells: ['<b>' + esc(r.id) + '</b>', tag(r.type, 'blue'), esc(r.title), esc(r.period || ''), esc(r.format || ''), r.size ? Math.round(r.size / 1024) + ' KB' : '—', r.status === 'published' ? tag('已发布', 'green') : tag('草稿', 'gray'), dt(r.createdAt),
-              r.downloadUrl ? '<a class="btn btn-sm" href="' + esc(r.downloadUrl) + '">⬇ 下载</a>' : ''],
+              r.downloadUrl ? '<a class="btn btn-sm" href="' + esc(r.downloadUrl) + '">下载</a>' : ''],
           })), { empty: '还没有生成过报表，点击上方卡片生成' }))}
       ${card('数据导出', '导出真实数据为 Excel / CSV',
         `<div style="display:flex;gap:8px;flex-wrap:wrap;">
