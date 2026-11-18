@@ -249,49 +249,6 @@ global.Scale = {
   /* ==================================================================
      动作表
      ================================================================== */
-  /** 把「填写体系调研」页面的输入收集成后端要的结构 */
-  function collectQmsSurvey() {
-    const f = UI.readForm(document.getElementById('content'));
-    const sv = {
-      company: f.nmCompany || f.qmsCompany, otherCert: f.qmsOtherCert, certs: f.qmsCert ? [f.qmsCert] : [],
-      chairman: f.qmsChairman, legalRep: f.qmsLegalRep, gm: f.qmsGm, mgmtRep: f.qmsMgmtRep,
-      teamMembers: f.qmsTeam, certOffice: f.qmsCertOffice, auditors: f.qmsAuditors,
-      products: f.qmsProducts, processFlow: f.qmsProcessFlow,
-      geo: f.qmsGeo, area: f.qmsArea, building: f.qmsBuilding, staff: f.qmsStaff, techStaff: f.qmsTechStaff,
-      equipment: f.qmsEquipment, customers: f.qmsCustomers, addr: f.qmsAddr, contactPerson: f.qmsContactPerson,
-      tel: f.qmsTel, fax: f.qmsFax,
-      mission: f.qmsMission, policy: f.qmsPolicy, objective: f.qmsObjective,
-      certDate: f.qmsCertDate, phase1Date: f.qmsPhase1Date, weekend: f.qmsWeekend, design: f.qmsDesign,
-      contactName: f.qmsContactName, contactPhone: f.qmsContactPhone,
-    };
-    const orgs = [];
-    Object.keys(f).forEach((k) => {
-      const m = /^org(\d+)d$/.exec(k);
-      if (!m) return;
-      const i = m[1];
-      const dept = String(f['org' + i + 'd'] || '').trim();
-      const owner = String(f['org' + i + 'o'] || '').trim();
-      if (dept || owner) orgs.push({ duty: '', dept, owner });
-    });
-    sv.orgs = orgs;
-    return sv;
-  }
-
-  /** 暂存草稿 / 标记填写完毕 */
-  async function saveQmsSurvey(completed) {
-    const sv = collectQmsSurvey();
-    if (!String(sv.company || '').trim()) { toast('请先填写「公司名称」', 'warn', 6000); return false; }
-    try {
-      const r = await API.post('/qip-real-v3/api/qms/survey', { survey: sv, completed: !!completed });
-      if (global.QS) { global.QS.survey = (r && r.survey) || sv; global.QS.completion = (r && r.completion) || 0; }
-      toast(completed ? ('已保存并标记填写完毕（完成度 ' + ((r && r.completion) || 0) + '%）') : '草稿已保存', 'ok', 6000);
-      return true;
-    } catch (e) {
-      toast('保存失败：' + e.message, 'err', 8000);
-      return false;
-    }
-  }
-
   /** 把纯文本（Markdown）下载成文件 */
   function downloadText(filename, text) {
     const blob = new Blob(['\ufeff' + String(text || '')], { type: 'text/markdown;charset=utf-8' });
@@ -991,18 +948,12 @@ global.Scale = {
           if ((rn.added || []).length) msg += `，新增 ${rn.added.length} 个`;
           if ((rn.dropped || []).length) msg += `，移除 ${rn.dropped.length} 个（历史数据保留原名）`;
           SetState.initDraft = null;
-          const brandChanged = !!(r.naming && r.naming.brand && r.naming.brand !== SetState.lastBrand);
-          toast(msg + (brandChanged ? '；平台显示名已改为「' + r.naming.brand + '」，Harness 左侧菜单名称刷新页面后同步' : ''), 'ok', 9000);
+          toast(msg, 'ok', 6000);
           await refresh();
         } catch (e) { toast('保存失败：' + e.message, 'err', 8000); }
       });
     },
     /* ---------------- 体系文件（中小型企业版） ---------------- */
-    qmsDraft: async () => { await saveQmsSurvey(false); },
-    qmsComplete: async (a) => {
-      const ok = await saveQmsSurvey(true);
-      if (ok && a && a.go) await go(a.go);
-    },
     qmsGen: async (a) => {
       const type = (a && ['procedure', 'tier3'].indexOf(a.type) >= 0) ? a.type : 'manual';
       const name = type === 'manual' ? '质量手册' : (type === 'procedure' ? '程序文件' : '三层次文件');
@@ -1057,15 +1008,14 @@ global.Scale = {
     },
 
     resetNaming: async () => {
+      const { defaults: df } = await API.get('/qip-real-v3/api/naming');
       askConfirm('恢复默认名称', [
-        ['车间', '一车间 / 二车间 / 三车间 / 四车间 / 五车间'],
-        ['产品', '产品A / 产品B / 产品C'],
-        ['公司', '某制造型企业'], ['部门', '质量改进部门'],
+        ['车间', df.workshops.join(' / ')],
+        ['产品', df.products.join(' / ')],
+        ['公司', df.company], ['部门', df.dept],
       ], '当前已改过的名称会被整体替换回平台内置的名称。').then(async (ok) => {
         if (!ok) return;
         try {
-          const r = await API.get('/qip-real-v3/api/naming');
-          const df = (r && r.defaults) || {};
           await API.post('/qip-real-v3/api/naming', { company: df.company, dept: df.dept, workshops: df.workshops, products: df.products });
           SetState.initDraft = null;
           toast('已恢复默认名称', 'ok');

@@ -10,4 +10,4 @@ jobs:
           node-version: '24'
       - run: node 自检.cjs
       - run: node scripts/check.cjs
-      - run: node --test test/operations.test.cjs
+      - run: node --test

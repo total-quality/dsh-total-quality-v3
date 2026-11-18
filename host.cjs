@@ -38,6 +38,7 @@ function writeScale(scale) {
 
 const store = require('./src/lib/store');
 const qms = require('./src/lib/qms');
+const qmsSurvey = require('./src/lib/qms-survey');
 const agent = require('./agent-host.cjs');
 const registry = require('./src/tools/registry');
 require('./src/tools/data');
@@ -823,65 +824,56 @@ route('GET', /^\/api\/system\/model$/, async (req, res) => {
 /* ---------------- 体系文件（中小型企业版）：调研 / 手册 / 程序文件 ---------------- */
 function qmsSurveyData() {
   const st = store.db.settings || {};
-  return st.qmsSurvey || null;
+  if (!st.qmsSurvey) return null;
+  const company = st.naming?.company ? currentNaming().company : st.qmsSurvey.company;
+  return { ...st.qmsSurvey, company, revision: st.qmsSurvey.revision || 0 };
 }
 function qmsDocList() {
   const st = store.db.settings || {};
   return Array.isArray(st.qmsDocs) ? st.qmsDocs : [];
-}
-function qmsSave(partial) {
-  store.db.settings = store.db.settings || {};
-  store.db.settings.qmsSurvey = Object.assign({}, store.db.settings.qmsSurvey || {}, partial);
-  store.touch();
 }
 function qmsSaveDocs(list) {
   store.db.settings = store.db.settings || {};
   store.db.settings.qmsDocs = list;
   store.touch();
 }
-const QMS_TEXT_FIELDS = ['company', 'chairman', 'legalRep', 'gm', 'deputyGm', 'mgmtRep', 'teamMembers', 'certOffice', 'auditors',
-  'products', 'processFlow', 'geo', 'area', 'building', 'staff', 'techStaff', 'edu', 'equipment', 'customers', 'addr',
-  'contactPerson', 'phone', 'tel', 'fax', 'mission', 'policy', 'objective', 'certDate', 'phase1Date', 'weekend', 'design',
-  'contactName', 'contactPhone', 'otherCert'];
-function cleanSurvey(input) {
-  const src = input && typeof input === 'object' ? input : {};
-  const out = {};
-  QMS_TEXT_FIELDS.forEach((k) => {
-    const v = String(src[k] == null ? '' : src[k]).replace(/[\r\n]+/g, ' ').trim();
-    if (v) out[k] = v.slice(0, 400);
-  });
-  out.certs = (Array.isArray(src.certs) ? src.certs : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 6);
-  out.orgs = (Array.isArray(src.orgs) ? src.orgs : []).map((o) => ({
-    duty: String((o && o.duty) || '').trim().slice(0, 40),
-    dept: String((o && o.dept) || '').trim().slice(0, 40),
-    owner: String((o && o.owner) || '').trim().slice(0, 30),
-  })).filter((o) => o.dept || o.duty).slice(0, 20);
-  return out;
-}
-/** 完成度：必填与关键项各占权重 */
-function surveyCompletion(sv) {
-  if (!sv) return 0;
-  const keys = ['company', 'certs', 'products', 'policy', 'objective', 'mgmtRep', 'gm', 'orgs', 'staff', 'contactName'];
-  let hit = 0;
-  keys.forEach((k) => {
-    const v = sv[k];
-    if (Array.isArray(v) ? v.length && (typeof v[0] !== 'object' || Object.keys(v[0] || {}).length) : String(v == null ? '' : v).trim()) hit++;
-  });
-  return Math.round((hit / keys.length) * 100);
+function surveyResponse(survey) {
+  const naming = currentNaming();
+  const progress = qmsSurvey.progress(survey || {});
+  return {
+    ok: true,
+    survey,
+    completion: progress.percent,
+    progress,
+    schema: qmsSurvey.schema,
+    defaults: { company: survey?.company || naming.company, products: naming.products },
+  };
 }
 
 route('GET', /^\/api\/qms\/survey$/, async (req, res) => {
-  const sv = qmsSurveyData();
-  sendJson(res, 200, { ok: true, survey: sv, completion: surveyCompletion(sv) });
+  sendJson(res, 200, surveyResponse(qmsSurveyData()));
 });
 route('POST', /^\/api\/qms\/survey$/, async (req, res) => {
   const body = await readJson(req);
-  const clean = cleanSurvey(body.survey || body);
-  clean.completed = !!(body.completed || (body.survey && body.survey.completed));
-  clean.updatedAt = new Date().toISOString();
-  qmsSave(clean);
-  store.saveSync(true);
-  sendJson(res, 200, { ok: true, survey: clean, completion: surveyCompletion(clean) });
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return sendJson(res, 400, { ok: false, error: '调研数据格式不正确' });
+  }
+  const previous = qmsSurveyData() || {};
+  const revision = previous.revision || 0;
+  if (body.revision !== undefined && body.revision !== revision) {
+    return sendJson(res, 409, { ok: false, error: '调研已在其他页面更新。请保留当前输入，刷新后核对。' });
+  }
+  const saved = { ...previous, ...qmsSurvey.cleanSurvey(body.survey || body, previous) };
+  if (store.db.settings?.naming?.company) saved.company = currentNaming().company;
+  saved.completed = body.completed === true || body.survey?.completed === true;
+  const missing = qmsSurvey.progress(saved).missingRequired;
+  if (saved.completed && missing.length) {
+    return sendJson(res, 400, { ok: false, error: '请补齐：' + missing.map(key => qmsSurvey.labels[key]).join('、') });
+  }
+  saved.revision = revision + 1;
+  saved.updatedAt = new Date().toISOString();
+  store.transaction(() => store.setSetting('qmsSurvey', saved));
+  sendJson(res, 200, surveyResponse(saved));
 });
 route('GET', /^\/api\/qms\/docs$/, async (req, res) => {
   const q = qs(req);
@@ -900,7 +892,10 @@ route('POST', /^\/api\/qms\/generate$/, async (req, res) => {
   const body = await readJson(req);
   const type = ['manual', 'procedure', 'tier3'].indexOf(body.type) >= 0 ? body.type : 'manual';
   const sv = qmsSurveyData();
-  if (!sv || !sv.company) return sendJson(res, 400, { ok: false, error: '请先到「填写体系调研」填写公司名称等基本信息，再生成文件。' });
+  const missing = qmsSurvey.progress(sv || {}).missingForGeneration;
+  if (missing.length) return sendJson(res, 400, {
+    ok: false, error: '请先保存调研并补齐：' + missing.map(key => qmsSurvey.labels[key]).join('、'),
+  });
   const b = qms.brief(sv);
   let docs = [];
   let source = 'template';
@@ -913,7 +908,7 @@ route('POST', /^\/api\/qms\/generate$/, async (req, res) => {
       const text = String((r && r.text) || '').replace(/^```(?:markdown|md)?\s*/i, '').replace(/```\s*$/, '').trim();
       if (text.length >= (type === 'manual' ? 800 : (type === 'procedure' ? 1500 : 2500))) {
         if (type === 'manual') {
-          docs = [{ title: b.company + ' 质量手册', code: 'QM-01', content: text }];
+          docs = [{ title: b.company + ' 质量手册', code: b.manual.code, content: qms.manualControlBlock(b) + '\n\n' + text }];
         } else if (type === 'procedure') {
           docs = qms.splitProcedures(text);
         } else {
@@ -931,7 +926,7 @@ route('POST', /^\/api\/qms\/generate$/, async (req, res) => {
     note = '当前没有接入模型，以下内容由内置模板按调研表生成（结构可直接用，条文需按实际流程复核）。';
   }
   if (!docs.length) {
-    if (type === 'manual') docs = [{ title: b.company + ' 质量手册', code: 'QM-01', content: qms.manualTemplate(b) }];
+    if (type === 'manual') docs = [{ title: b.company + ' 质量手册', code: b.manual.code, content: qms.manualTemplate(b) }];
     else if (type === 'procedure') docs = qms.procedureTemplates(b);
     else docs = qms.tier3Templates(b);
   }
@@ -943,7 +938,7 @@ route('POST', /^\/api\/qms\/generate$/, async (req, res) => {
     content: d.content, source, model, createdAt: now,
   }));
   // 同类型只保留最近一次生成结果
-  const keep = qmsDocList().filter((d) => d.type !== type);
+  const keep = qmsDocList().filter((d) => d.type !== type || d.analysisId);
   qmsSaveDocs(keep.concat(saved));
   store.saveSync(true);
   sendJson(res, 200, {

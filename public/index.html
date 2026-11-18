@@ -7,6 +7,7 @@
 <link rel="icon" href="assets/platform-icon.svg">
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="js/operations.css">
+<link rel="stylesheet" href="js/qms-survey.css">
 </head>
 <body>
 <div class="app">
@@ -57,6 +58,7 @@
       <div class="nav-menu" id="navQms">
         <div class="nav-item nav-parent">体系文件<span class="caret">▾</span></div>
         <div class="nav-drop">
+          <div class="nav-item" data-page="qmsSurvey">填写体系调研</div>
           <div class="nav-item" data-page="qmsManual">一键生成手册</div>
           <div class="nav-item" data-page="qmsProc">一键生成程序文件</div>
           <div class="nav-item" data-page="qmsTier3">一键生成三层次文件</div>
@@ -74,6 +76,7 @@
       <div class="nav-menu">
         <div class="nav-item nav-parent">系统<span class="caret">▾</span></div>
         <div class="nav-drop">
+          <div class="nav-item" data-page="init">企业设置</div>
           <div class="nav-item" data-page="arch">DeepSeek 插件架构</div>
           <div class="nav-item" data-page="mobile">移动端适配</div>
           <div class="nav-item" data-page="audit">审计日志</div>
@@ -123,6 +126,7 @@
 <script src="js/pages-kb.js"></script>
 <script src="js/pages-system.js"></script>
 <script src="js/pages-qms.js"></script>
+<script src="js/qms-survey.js"></script>
 <script src="js/tool-wizards.js"></script>
 <script src="api/operations/schema.js"></script>
 <script src="js/operations.js"></script>

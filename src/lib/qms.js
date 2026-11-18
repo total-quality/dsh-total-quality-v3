@@ -12,50 +12,75 @@ function s(v, dflt) {
   return t || (dflt === undefined ? '' : dflt);
 }
 function arr(v) { return Array.isArray(v) ? v.filter((x) => String(x == null ? '' : x).trim()) : []; }
+function paragraphs(value) { return String(value ?? '').trim(); }
 
 /** 把调研表整理成生成用的「要点摘要」 */
 function brief(sv) {
   sv = sv || {};
   const certs = arr(sv.certs).map((c) => CERT_NAME[c] || c);
-  const orgs = arr(sv.orgs).map((o) => `${s(o.dept, '相关部门')}（${s(o.duty)}${o.owner ? '，负责人 ' + s(o.owner) : ''}）`);
+  const orgs = arr(sv.orgs).map(o => {
+    const detail = [s(o.duty), o.owner ? '负责人 ' + s(o.owner) : ''].filter(Boolean).join('，');
+    return s(o.dept, '相关部门') + (detail ? '（' + detail + '）' : '');
+  });
   const products = s(sv.products, '公司主导产品');
+  const standardNames = [...certs, s(sv.otherCert)].filter(Boolean);
   return {
     company: s(sv.company, '本公司'),
-    cert: certs.length ? certs.join(' + ') : 'ISO 9001:2015',
-    certShort: arr(sv.certs)[0] || 'ISO9001',
+    cert: standardNames.join(' + ') || '适用体系待核对',
     products,
+    scope: paragraphs(sv.scope),
+    processFlow: paragraphs(sv.processFlow),
+    roles: paragraphs(sv.roles),
+    controls: paragraphs(sv.controls),
+    risks: paragraphs(sv.risks),
+    documents: paragraphs(sv.documents),
     scale: {
       staff: Number(sv.staff || 0) || null,
       tech: Number(sv.techStaff || 0) || null,
       area: s(sv.area), building: s(sv.building),
       customers: s(sv.customers),
-      equipment: s(sv.equipment),
+      equipment: s(sv.equipment), geo: s(sv.geo), education: paragraphs(sv.edu),
     },
     leaders: {
       chairman: s(sv.chairman), legal: s(sv.legalRep), gm: s(sv.gm), deputy: s(sv.deputyGm), rep: s(sv.mgmtRep),
-      office: s(sv.certOffice), auditors: s(sv.auditors), team: s(sv.teamMembers),
+      office: s(sv.certOffice), auditors: s(sv.auditors), team: s(sv.teamMembers), teamLeader: s(sv.teamLeader), officeMembers: s(sv.officeMembers),
     },
     orgs,
-    policy: s(sv.policy), objective: s(sv.objective), purpose: s(sv.mission),
-    plan: { date: s(sv.certDate), phase1: s(sv.phase1Date), weekend: s(sv.weekend), design: s(sv.design) },
-    contact: { person: s(sv.contactPerson), phone: s(sv.contactPhone), addr: s(sv.addr), tel: s(sv.tel), fax: s(sv.fax) },
+    policy: paragraphs(sv.policy), objective: paragraphs(sv.objective), purpose: paragraphs(sv.mission),
+    plan: { date: s(sv.certDate), phase1: s(sv.phase1Date), audit: s(sv.auditDate), weekend: s(sv.weekend), design: s(sv.design) },
+    manual: {
+      code: sv.documentPrefix ? s(sv.documentPrefix) + '-QM-01' : 'QM-01',
+      author: s(sv.manualAuthor || sv.certOffice),
+      reviewer: s(sv.manualReviewer || sv.mgmtRep),
+      approver: s(sv.manualApprover || sv.gm),
+      effectiveDate: s(sv.manualEffectiveDate),
+    },
+    contact: { person: s(sv.contactPerson), phone: s(sv.phone), addr: s(sv.addr), tel: s(sv.tel), fax: s(sv.fax) },
   };
 }
 
 function chapterList(b) {
-  const iso = b.certShort === 'IATF16949' ? 'IATF 16949' : b.cert;
   return [
-    ['1', '范围', `本手册适用于${b.company}${b.products ? '的' + b.products : ''}的设计开发、生产、检验与交付全过程，用于向客户及相关方证实本公司满足${iso}标准要求。`],
-    ['2', '规范性引用文件', `${iso}；ISO 9000:2015《质量管理体系 基础和术语》；与产品相关的国家标准、行业标准及顾客特定要求。`],
+    ['1', '范围', `体系覆盖的产品与服务：${b.products}。\n\n${b.scope || '涉及的厂区、业务边界及不适用条款待企业核对。'}`],
+    ['2', '规范性引用文件', `调研登记的适用体系：${b.cert}。具体版本与顾客特定要求由企业核对。`],
     ['3', '术语和定义', '采用 ISO 9000:2015 的术语和定义；本公司内部使用的「不合格品」「让步接收」「首件确认」等术语见附录 A。'],
     ['4', '组织环境', `本公司识别了内外部环境因素与相关方需求（主要客户：${b.scale.customers || '见顾客清单'}）。质量管理体系范围见第 1 章，过程清单与相互关系见附录 B 过程关系图。`],
     ['5', '领导作用', `最高管理者${b.leaders.gm ? '（' + b.leaders.gm + '）' : ''}对质量管理体系有效性负责，管理者代表为${b.leaders.rep || '质量负责人'}。质量方针见第 5.2 条，职责与权限见《组织架构与职责说明》。`],
     ['6', '策划', '依据风险与机遇的评估结果制定质量目标（见 6.2），并规划变更管理。目标按部门分解，每月在质量例会上评审达成情况。'],
     ['7', '支持', '人员、基础设施、过程运行环境、监视和测量资源、组织知识按《人力资源与培训控制程序》《基础设施与设备管理程序》执行；成文信息按《文件与记录控制程序》管理。'],
-    ['8', '运行', `从顾客要求评审、设计开发${b.plan.design === '无' ? '（本公司不承担设计开发，按顾客图纸生产）' : ''}、采购、生产与服务提供到放行与交付，各过程按对应程序文件执行，关键工序设质量控制点。`],
+    ['8', '运行', `设计开发：${b.plan.design || '待核对'}。\n\n主要过程：${b.processFlow || '待补充主要过程及外包接口。'}\n\n检验、放行与追溯：${b.controls || '待补充检查频次、放行岗位和追溯记录。'}`],
     ['9', '绩效评价', '通过顾客满意度调查、过程绩效指标、内部审核（每年至少一次）、管理评审（每年至少一次）评价体系绩效。'],
     ['10', '改进', '对不合格与顾客投诉采取纠正措施，运用 PDCA 与 QC 手法推动持续改进，改进结果纳入知识库。'],
   ];
+}
+
+function manualControlBlock(b) {
+  const m = b.manual;
+  return [
+    '**文件编号**：' + m.code + '　|　**状态**：待核对草稿',
+    '**编制**：' + (m.author || '待填写') + '　|　**审核**：' + (m.reviewer || '待填写') + '　|　**批准**：' + (m.approver || '待填写'),
+    '**拟生效日期**：' + (m.effectiveDate || '待确认'),
+  ].join('\n\n');
 }
 
 /** 内置模板：质量手册 */
@@ -63,7 +88,7 @@ function manualTemplate(b) {
   const L = [];
   L.push(`# ${b.company}　质量手册`);
   L.push('');
-  L.push(`> 依据 ${b.cert} 编制　|　版本 A/0　|　编制日期 ${new Date().toLocaleDateString('zh-CN')}`);
+  L.push(manualControlBlock(b));
   L.push('');
   L.push('## 目录');
   chapterList(b).forEach(([no, name]) => L.push(`${no}. ${name}`));
@@ -73,29 +98,41 @@ function manualTemplate(b) {
   L.push('');
   L.push('## 0 发布令');
   L.push('');
-  L.push(`${b.company}依据 ${b.cert} 建立并实施质量管理体系。本手册阐述了本公司的质量方针、目标与各过程要求，是全体员工必须遵守的纲领性文件，自发布之日起执行。`);
+  L.push(`发布令草稿：${b.company}拟依据 ${b.cert} 编制本手册。经确认、批准及发布后执行。`);
   L.push('');
-  L.push(`最高管理者：${b.leaders.gm || '＿＿＿＿'}　　日期：${b.plan.date || '＿＿＿＿'}`);
+  L.push(`最高管理者：${b.leaders.gm || '待填写'}　　签署日期：待签署`);
+  if (b.plan.date || b.plan.phase1 || b.plan.audit) L.push(`认证安排：一阶段审核 ${b.plan.phase1 || '待定'}，正式审核 ${b.plan.audit || '待定'}，计划取证 ${b.plan.date || '待定'}。`);
   L.push('');
   L.push('## 公司简介');
   L.push('');
   L.push(`${b.company}主要从事${b.products}的生产与销售${b.scale.staff ? `，现有员工 ${b.scale.staff} 人（其中管理技术人员 ${b.scale.tech || '若干'} 人）` : ''}${b.scale.area ? `，占地面积 ${b.scale.area} ㎡、建筑面积 ${b.scale.building || '—'} ㎡` : ''}。`);
   if (b.scale.equipment) L.push(`主要生产设备：${b.scale.equipment}。`);
   if (b.scale.customers) L.push(`主要客户：${b.scale.customers}。`);
+  if (b.scale.geo) L.push(`地理位置与交通：${b.scale.geo}。`);
+  if (b.scale.education) L.push(`人员学历分布：${b.scale.education}。`);
   if (b.contact.addr) L.push(`地址：${b.contact.addr}${b.contact.tel ? '　电话：' + b.contact.tel : ''}${b.contact.fax ? '　传真：' + b.contact.fax : ''}`);
   L.push('');
   L.push('## 质量方针与目标');
   L.push('');
-  L.push(`**公司宗旨**：${b.purpose || '以质量求生存，以改进求发展'}`);
+  L.push(`**公司宗旨**：${b.purpose || '待企业确认'}`);
   L.push('');
-  L.push(`**质量方针**：${b.policy || '全员参与、过程受控、持续改进、顾客满意'}`);
+  L.push(`**质量方针**：${b.policy || '待企业确认'}`);
   L.push('');
-  L.push(`**质量目标**：${b.objective || '一次合格率 ≥ 98%；顾客投诉 ≤ 2 起/年；交付及时率 ≥ 98%；重大质量事故为 0'}`);
+  L.push(`**质量目标**：${b.objective || '待企业确认指标、口径和统计周期'}`);
   L.push('');
   chapterList(b).forEach(([no, name, text]) => {
     L.push(`## ${no} ${name}`);
     L.push('');
     L.push(text);
+    if (no === '5') {
+      if (b.orgs.length) L.push('', '部门职责：', ...b.orgs.map(org => '- ' + org));
+      if (b.roles) L.push('', '岗位与职责：' + b.roles);
+      if (b.leaders.teamLeader || b.leaders.team) L.push('', `贯标团队：组长 ${b.leaders.teamLeader || '待定'}，组员 ${b.leaders.team || '待定'}。`);
+      if (b.leaders.office || b.leaders.officeMembers) L.push('', `贯标办：主任 ${b.leaders.office || '待定'}，成员 ${b.leaders.officeMembers || '待定'}。`);
+    }
+    if (no === '6' && b.risks) L.push('', '已识别风险：' + b.risks);
+    if (no === '7' && b.documents) L.push('', '已有文件与待补记录：' + b.documents);
+    if (no === '9' && b.leaders.auditors) L.push('', '调研记录的内审员：' + b.leaders.auditors);
     L.push('');
   });
   L.push('## 附录 A　术语与缩略语');
@@ -167,15 +204,18 @@ function procedureTemplates(b) {
     L.push('## 2 适用范围');
     L.push('');
     L.push(`适用于${b.company}质量管理体系覆盖的${b.products}相关过程。`);
+    if (b.scope) L.push('', '企业调研范围：' + b.scope);
     L.push('');
     L.push('## 3 职责');
     L.push('');
     L.push(`- 管理者代表（${b.leaders.rep || '质量负责人'}）：批准本程序并监督执行`);
-    L.push(`- ${b.orgs[0] || '质量部门'}：组织实施、检查与记录归档`);
-    L.push('- 各相关部门：按本程序要求执行并保存记录');
+    L.push('- 适用过程的责任部门：组织实施、检查与记录归档');
+    if (b.roles) L.push('', '调研记录的岗位分工：' + b.roles);
     L.push('');
     L.push('## 4 工作流程');
     L.push('');
+    if (b.processFlow && /采购|生产|测量|不合格/.test(title)) L.push('相关过程：' + b.processFlow, '');
+    if (b.controls && /生产|测量|不合格/.test(title)) L.push('现行检验、放行与追溯：' + b.controls, '');
     steps.forEach((st, k) => L.push(`${k + 1}. ${st}`));
     L.push('');
     L.push('## 5 相关记录');
@@ -196,7 +236,7 @@ function manualPrompt(b) {
   return [
     '您是资深质量体系咨询师，为一家中小型制造企业编写 ISO 9001 / IATF 16949 质量手册。',
     '只输出 Markdown，不要解释、不要代码块围栏。结构必须包含：标题、目录、0 发布令、公司简介、质量方针与目标、第 1~10 章（范围/规范性引用文件/术语/组织环境/领导作用/策划/支持/运行/绩效评价/改进）、附录 A 术语、附录 B 过程清单表、附录 C 文件清单表。',
-    '要求：紧扣给定企业信息（公司名、产品、规模、组织、方针目标、认证计划），不要编造未提供的事实；条文要能直接落地到中小企业，篇幅 1500~2500 字。',
+    '要求：沿用给定的体系范围、过程及职责，质量方针和目标原样引用。未提供的事实标记待核对。文件编号和签署栏由系统附加，无需重复。证书计划不可作为已经取证或文件已生效的依据。',
     '【企业调研信息】',
     JSON.stringify(b, null, 2),
   ].join('\n');
@@ -207,7 +247,7 @@ function procedurePrompt(b) {
     '您是资深质量体系咨询师，为一家中小型制造企业编写体系程序文件。',
     '只输出 Markdown。共 10 个程序文件，用二级标题「## 文件名」分隔，每个包含：编号（QP-01…QP-10）、目的、适用范围、职责、工作流程（编号步骤）、相关记录、相关文件。',
     '十个文件：文件控制、记录控制、管理评审、内部审核、不合格品控制、纠正措施、采购与供应商控制、生产与服务提供控制、监视和测量资源控制、人力资源与培训。',
-    '要求：步骤要具体可执行（谁、做什么、留下什么记录），贴合中小企业一人多岗的实际，不要照抄大企业条文。',
+    '按给定过程、岗位分工和已有记录编制。未知的岗位、频次、阈值和记录编号请标注待核对，不要补造。步骤写清谁执行、做什么和保存什么。',
     '【企业调研信息】',
     JSON.stringify(b, null, 2),
   ].join('\n');
@@ -366,4 +406,4 @@ function splitTier3(md) {
   });
 }
 
-module.exports = { brief, manualTemplate, procedureTemplates, tier3Templates, manualPrompt, procedurePrompt, tier3Prompt, splitProcedures, splitTier3, CERT_NAME };
+module.exports = { brief, manualTemplate, manualControlBlock, procedureTemplates, tier3Templates, manualPrompt, procedurePrompt, tier3Prompt, splitProcedures, splitTier3, CERT_NAME };

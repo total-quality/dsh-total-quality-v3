@@ -25,12 +25,16 @@
 
 模型通过现有 Harness LLM 桥接调用。模型未配置或返回不可用内容时，明确显示本地资料整理及错误提示；不把工具协议 JSON 当成回答，不虚构检测、执行或批准结果。SPC / Cpk 沿用既有统计引擎，测量点数不作为产品不良件数。
 
+## 体系调研
+
+进入「体系文件 → 填写体系调研」。可先保存草稿，之后按模块继续填写。公司、适用体系和覆盖产品保存后即可生成文档草稿。手册沿用调研中的流程、职责、质量目标与签署信息。公司、部门、产品和车间从「企业设置」维护。
+
 ## 安装
 
 在 DeepSeek Harness 的插件管理器中添加本仓库的 Release 包，或在已安装 DSH 与 pnpm 的终端执行：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.4/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.5/dsh-total-quality-v3.tgz
 ```
 
 安装到当前使用的 profile 后，按宿主提示加载，点击侧栏“全质开源质量平台2”。无需再启动占用同一端口的 DSH 进程。Desktop 用户应安装到其实际使用的 profile。
@@ -56,7 +60,7 @@ dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-
 ```sh
 node 自检.cjs
 node scripts/check.cjs
-node --test test/operations.test.cjs
+node --test
 ```
 
 检查涵盖流程状态、重复导入、复发、并发版本、数量核对、保存回滚、模型草稿冲突、附件范围、SQLite 重载及二维码原图校验。浏览器验收另覆盖页面、指南、批准、提交与复核、取消批准、文件预检接收、分析留档和窄屏显示。

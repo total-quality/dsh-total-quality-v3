@@ -7,20 +7,6 @@
   const Pages = global.Pages;
   const SetState = global.SetState = { steps: null, testing: false, initDraft: null, aiSuggestion: null, aiNoteText: '' };
 
-  /* ================= 初始设置（已合并到右上角「我」页面顶部） ================= */
-  Pages.init = {
-    title: '初始设置', sub: '已合并到右上角「我」· 企业设置与体系调研',
-    async render() {
-      return `
-      <div class="ai-strip">
-        <div class="ai-ico">🏷️</div>
-        <div class="ai-txt"><b>「初始设置」已并入右上角「我」：</b>公司、部门、车间、产品与「增加信息」现在都放在「我 · 企业设置与体系调研」页面的最前面，和体系调研表在同一页填写，避免同一项名称在两处维护。</div>
-        ${act('去「我 · 企业设置与体系调研」', 'goto', { page: 'qmsSurvey' }, 'btn btn-ai')}
-      </div>
-      <div class="footer-note">${brand()} · 初始设置</div>`;
-    },
-  };
-
   /* ================= 审批中心与待办 ================= */
   Pages.approval = {
     title: '审批中心与待办', sub: 'OA 审批流 · 派工任务 · 人工确认拦截的动作',
