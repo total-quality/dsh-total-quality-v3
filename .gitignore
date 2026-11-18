@@ -1,0 +1,12 @@
+node_modules/
+data/
+reports/
+*.db
+*.db-shm
+*.db-wal
+*.tgz
+.env
+.env.*
+.npmrc
+*.log
+coverage/

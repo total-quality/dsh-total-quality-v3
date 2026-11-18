@@ -1,0 +1,83 @@
+{
+  "name": "dsh-total-quality-v3",
+  "version": "3.0.0",
+  "private": false,
+  "type": "module",
+  "description": "全质开源质量平台2：独立的 V3 质量运营插件，测量预检与筛查、方案准备、任务派发、执行复核、结案报告与经验沉淀；保留右侧微信服务二维码。",
+  "license": "MIT",
+  "author": "全质开源质量平台贡献者",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/total-quality/dsh-total-quality-v3.git"
+  },
+  "homepage": "https://github.com/total-quality/dsh-total-quality-v3#readme",
+  "bugs": {
+    "url": "https://github.com/total-quality/dsh-total-quality-v3/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "icon": "./icon.svg",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "open-source",
+    "quality",
+    "quality-management",
+    "spc",
+    "iso9001",
+    "iatf16949",
+    "pdca",
+    "8d",
+    "manufacturing",
+    "sqlite"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2 || >=0.2.2-alpha.3"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host.cjs",
+    "agent-host.cjs",
+    "llm-bridge.cjs",
+    "db.cjs",
+    "tools-dsh.cjs",
+    "src/**/*.js",
+    "src/package.json",
+    "public/**/*",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "自检.cjs",
+    "CONTRIBUTING.md",
+    "LICENSE.md",
+    "cordis.patch.yml",
+    "安装说明.md",
+    "本机独立安装说明.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible",
+        "0.2.2-rc.1": "compatible"
+      }
+    }
+  }
+}

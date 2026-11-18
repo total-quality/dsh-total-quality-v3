@@ -1,0 +1,17 @@
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
+const assert = require('node:assert/strict');
+const root = path.resolve(__dirname, '..');
+let checked = 0;
+function walk(dir) { for (const e of fs.readdirSync(dir, {withFileTypes:true})) { if (['.git','node_modules','data','reports','outputs'].includes(e.name)) continue; const file = path.join(dir,e.name); if (e.isDirectory()) walk(file); else if (/\.(?:js|cjs)$/.test(e.name)) { const p = spawnSync(process.execPath,['--check',file],{encoding:'utf8'}); assert.equal(p.status,0,p.stderr); checked++; } } }
+walk(root);
+const qr = fs.readFileSync(path.join(root,'public/assets/wechat-support-blue.svg'));
+assert.equal(crypto.createHash('sha256').update(qr).digest('hex'),'09c4ce9f282b619455cc000b3a6f01fbf9bec31b6747d37dc53d3219ce9b0d04');
+assert(fs.readFileSync(path.join(root,'public/js/operations.js'),'utf8').includes('免费服务微信：周一到周六，早8:00至晚8:00'));
+assert(fs.readFileSync(path.join(root,'icon.svg'),'utf8').includes('fill="#fff"'));
+const pkg = JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+assert.equal(pkg.name,'dsh-total-quality-v3');
+console.log(JSON.stringify({syntaxFiles:checked,qrPreserved:true,package:pkg.name}));
