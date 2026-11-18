@@ -63,8 +63,8 @@ window.__ModuleLoader__.load({
 
     function QipIcon() {
       return h('svg', {width:22,height:22,viewBox:'0 0 24 24','aria-label':'全质开源质量平台2'},
-        h('rect',{x:1,y:1,width:22,height:22,rx:5,fill:'#fff',stroke:'#d4e3fb'}),
-        h('text',{x:12,y:18,textAnchor:'middle',fill:'#2458b3',fontSize:17,fontWeight:700,fontFamily:'Microsoft YaHei,system-ui,sans-serif'},'全'));
+        h('rect',{x:1,y:1,width:22,height:22,rx:5,fill:'#2458b3'}),
+        h('text',{x:12,y:18,textAnchor:'middle',fill:'#fff',fontSize:17,fontWeight:700,fontFamily:'Microsoft YaHei,system-ui,sans-serif'},'全'));
     }
 
     return {

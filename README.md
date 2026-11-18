@@ -2,7 +2,7 @@
 
 基于第三版“自主质量运营”原型实现的 DeepSeek Harness 插件。采用原生 JavaScript、Node 内置 SQLite 与现有统计 / OOXML 引擎，无 npm 运行时依赖，无前端构建步骤。
 
-本仓库独立于 `total-quality/dsh-total-quality`，保留原插件与原数据库。侧栏显示 **全质开源质量平台2**，图标为白底“全”字，驾驶舱右侧保留原微信服务二维码。
+本仓库独立于 `total-quality/dsh-total-quality`，保留原插件与原数据库。侧栏显示 **全质开源质量平台2**，图标为蓝底白字的“全”字，驾驶舱右侧保留原微信服务二维码。
 
 ![运行中枢与服务二维码](docs/preview/operations.png)
 
@@ -30,7 +30,7 @@
 在 DeepSeek Harness 的插件管理器中添加本仓库的 Release 包，或在已安装 DSH 与 pnpm 的终端执行：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.2/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.3/dsh-total-quality-v3.tgz
 ```
 
 安装到当前使用的 profile 后，按宿主提示加载，点击侧栏“全质开源质量平台2”。无需再启动占用同一端口的 DSH 进程。Desktop 用户应安装到其实际使用的 profile。
