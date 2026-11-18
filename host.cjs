@@ -174,7 +174,7 @@ route('GET', /^\/api\/operations\/cases\/([^/]+)\/report$/, async (req, res, id)
 /* ---------------- 健康检查与元信息 ---------------- */
 route('GET', /^\/api\/health$/, async (req, res) => {
   sendJson(res, 200, {
-    ok: true, service: brandName(), version: '3.0.0',
+    ok: true, service: brandName(), version: require('./package.json').version,
     uptime: Math.round(process.uptime()) + 's',
     dataDir: DATA_DIR, counts: countAll(),
     db: store.persist ? store.persist.info() : { engine: 'json', path: store.file },

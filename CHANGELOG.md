@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.1
+
+### Fixed
+- 将数据目录忽略规则限定为仓库根目录，确保 GitHub 源码包含 src/data 样例，Linux 克隆后可正常初始化。
+
 ## 3.0.0
 
 ### Added

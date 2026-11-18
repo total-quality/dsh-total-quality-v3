@@ -30,7 +30,7 @@
 在 DeepSeek Harness 的插件管理器中添加本仓库的 Release 包，或在已安装 DSH 与 pnpm 的终端执行：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.0/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.1/dsh-total-quality-v3.tgz
 ```
 
 安装到当前使用的 profile 后，按宿主提示加载，点击侧栏“全质开源质量平台2”。无需再启动占用同一端口的 DSH 进程。Desktop 用户应安装到其实际使用的 profile。
