@@ -15,22 +15,29 @@
 <p align="center"><a href="README.md">简体中文</a> · <strong>English</strong></p>
 
 <p align="center">
-  <a href="#overview">Overview</a> · <a href="#quick-start">Quick Start</a> · <a href="#features">Features</a> · <a href="#resources">Resources</a> · <a href="#releases">Releases</a>
+  <a href="#overview">Overview</a> · <a href="#quick-start">Quick Start</a> · <a href="#use-cases">Use Cases</a> · <a href="#features">Features</a> · <a href="#automation-and-approvals">Automation and Approvals</a> · <a href="#resources">Resources</a> · <a href="#releases">Releases</a>
 </p>
 
 ## Overview
 
-Total Quality runs inside DeepSeek Harness. It is for factories that already use inspection spreadsheets, issue logs, and quality documents and want a single place for their daily quality work.
+Total Quality is a quality workbench for small and midsize manufacturers, available as a DeepSeek Harness plugin. It is built around the issues a factory handles every day. An inspection finds an out-of-spec dimension, a shipment of incoming parts fails inspection, a customer reports defects, or a production team needs to change a fixture or work step. Quality engineers record what happened, the responsible lead reviews the evidence and approves a plan, and the people on the shop floor record what they did. The report and original records remain available after closure.
 
-An inspection finds a batch of bushings outside the diameter tolerance. The photo goes into a group chat, the corrective action sheet into a shared folder, and the reinspection results arrive by email. At the next review, finding out who is handling the issue, how much stock was contained, and which record shows the fix worked can mean searching several places. Total Quality keeps the affected lot, measurements, owner, deadline, actions, and attachments together in one work order.
+Consider a batch of bushings with an oversize outside diameter. Measurements are in a spreadsheet, the containment list is on the shop floor, and the reinspection results are attached to an email. Total Quality puts the batch, measurements, disposition, owner, deadline, and review comments in one work order. A saved lesson can take the next investigator back to the original case.
 
-![The quality dashboard shows items awaiting approval, work in progress, and follow-ups](docs/preview/operations.png)
+| Who uses it | What they do in Total Quality |
+| --- | --- |
+| Quality leads and supervisors | See what needs a decision, what is being worked on, and what evidence is missing. Review plans, return incomplete submissions, or close work orders. |
+| Inspectors and quality engineers | Import measurements, trace affected lots, look up inspection requirements, investigate process variation with SPC, and open improvement projects for recurring issues. |
+| Production, process, and purchasing teams | Follow assigned tasks and record containment, reinspection, rework, supplier feedback, or process changes in the work order. |
+| Quality system and training leads | Maintain internal documents and lessons learned, prepare quality manuals and procedures, and record training and assessment results. |
+
+![Quality dashboard showing decisions, work in progress, and recent activity](docs/preview/operations.png)
 
 ## Quick Start
 
-1. In the DeepSeek Harness plugin manager, add `dsh-total-quality-v3.tgz` from the [release page](https://github.com/total-quality/dsh-total-quality-v3/releases/latest). Then open **全质开源质量平台2** in the sidebar.
-2. Open a sample work order, approve the plan, find the assigned tasks, and submit a sample reinspection result.
-3. To try your own data, use **接收与追溯** (Intake and Traceability) to import a measurement sheet. You can also record a shop-floor issue, a customer complaint, or a change request directly.
+1. Download `dsh-total-quality-v3.tgz` from the [latest release](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) and add it in the DeepSeek Harness plugin manager. Open **全质开源质量平台2** in the sidebar.
+2. Open a sample work order in **确认与纠正** (Review and Correct). Check which measurements triggered it, review the plan, and approve it. Find the same order in **执行跟进** (Execution Follow-up) to try submitting and reviewing a reinspection result.
+3. When you are ready to use your own data, enter your company, departments, workshops, and products in **企业设置** (Company Settings). Download the measurement template from **接收与追溯** (Intake and Traceability), fill it with one lot's results, and review the import preview. You can also start by logging a current shop-floor issue or complaint. Before switching to production use, back up local data and clear the trial records in **System Settings → Data Management**.
 
 For the web profile, you can also install from a terminal:
 
@@ -38,42 +45,73 @@ For the web profile, you can also install from a terminal:
 dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.11/dsh-total-quality-v3.tgz
 ```
 
+## Use Cases
+
+### Production issue, from the first measurement to closure
+
+Say a bushing's outside diameter has an upper limit of 12.10 mm and the inspection sheet contains a reading of 12.13 mm. After a quality engineer checks the file preview and accepts the import, the workbench screens measurements by lot and characteristic. The anomaly appears in the dashboard's review queue. The batch view shows measurements, out-of-spec readings, control chart signals, and Cpk when there are enough observations. Part-level defect counts come from the shop floor's reinspection.
+
+The lead checks the original measurement and decides what needs to be contained, who will recheck it, and by when. After approval, the current task appears in the local to-do list. If the plan needs to change during execution, the lead can withdraw approval and return to plan review. The work order retains its task and submission history.
+
+The shop-floor team records the action and attaches its evidence. A typical issue moves through **containment and impact assessment, verification of occurrence and escape causes, corrective action and standards updates, and verification across subsequent lots**. A lead can accept each result or return it with comments. If the first submission covers finished stock but leaves work in progress unaccounted for, the team can add the missing quantities and inspection records to the same order.
+
+After correction, record each verification lot's date, sample size, defective count, and original record number. When business closure checks are enabled, the platform flags missing traceability, quantity, or verification records. Once the lead closes the case, the platform can generate a Word report and store a lesson learned. If new abnormal measurements arrive for the same batch, you can look up its earlier history by lot.
+
+![Work order showing measurements, proposed actions, verification requirements, owners, and approval controls](docs/preview/work-order.png)
+
+### Incoming material, complaints, and changes
+
+| Scenario | What to record and follow up |
+| --- | --- |
+| **Incoming parts fail inspection** | Record the purchase or receipt reference, supplier lot, material, and inspection standard. Reconcile stock and material already issued to production. Capture containment, reinspection, and supplier feedback. |
+| **Customer complaint or return** | Record the product, customer, shipment, and lot. Reconcile shipped and returned quantities and record containment, rework, or scrap. Use verified facts to prepare an 8D report for review. |
+| **Process, fixture, or standard changes** | Record the change reference, applicable requirements, and verification plan. Compare results after implementation and record updates to risk analysis, control plans, work instructions, and training records. |
+| **An issue needs a same-day response** | Use QRQC to record the initial response, temporary actions, owners, and deadlines. New actions from meeting minutes can become local tasks. Document the basis for closure after the work is complete. |
+
 ## Features
 
-### Quality work orders, task assignment, and closure
+### Quality dashboard and issue records
 
-Import Excel, CSV, or JSON measurement records. Total Quality checks lot identifiers, specification limits, and values, then screens the data by lot and characteristic. An anomaly opens a work order with measurements and suggested next steps for the quality lead to review.
+The dashboard gives leads a place to review plans, inspect submitted results, follow execution, find missing information, and open archived orders. For a morning meeting, it shows what decision is due, who is doing the work, and what evidence still needs review. Screening activity and manual decisions are recorded over time.
 
-For the bushing example, the quality lead can adjust the containment scope, owners, and deadlines. Approved tasks appear in the platform's to-do list. The shop-floor team records how many parts were segregated, whether any shipped, and what the reinspection found, attaching inspection records in the same work order. The lead can request more evidence, review later lots, and close the issue when the results support closure.
+The quality issue register tracks source, severity, status, and related projects. For recurring findings, look up similar cases and existing projects before deciding whether to start a new one. Once an approved work order enters execution, its issue, improvement project, approval status, and current task are connected.
 
-Configure the screening schedule, task assignment, and archiving in settings. **The responsible person approves plans, reviews execution results, and decides when to close each work order.** Each decision records who made it, when, and their comments.
+### Data intake, traceability, and quality tools
 
-![A quality work order with out-of-spec measurements, action plan, owners, and approval controls](docs/preview/work-order.png)
+Import measurements from Excel, CSV, or JSON. Confirm fields, limits, samples, and lot identifiers in the preview. Previously accepted duplicate files are skipped, and the intake log records the filename, record count, and time. The data management page also accepts issue lists, inspection results, material costs, and bills of materials. Use recorded lot and supplier details to trace an issue.
 
-### Lot traceability and process analysis
+Use measurements already in the platform or paste a series of your own. The tools include Cpk and Ppk, I-MR, Xbar-R, Xbar-S and EWMA charts, Pareto charts, hypothesis tests, GR&R, DOE, Gantt scheduling, and quality cost calculations. For example, group defects by workshop or category in a Pareto chart, then examine a control chart for the process that accounts for the largest share.
 
-- **Trace lots and complaints.** Record suppliers, products, lots, work steps, inspection records, and quantities in stock, in process, or shipped. Track the scope, containment, and reinspection for a complaint.
-- **Monitor variation.** View I-MR, Xbar-R, Xbar-S, or EWMA control charts. Check for signals using GB/T 4091 rules and review capability metrics such as Cpk and Ppk.
-- **Investigate recurring issues.** Open an improvement project and use 5 Whys to record root causes and supporting evidence. Bring existing work orders and measurements into an 8D report. PFMEA and DFMEA forms support failure chains, action priority review, and revisions.
+### Improvement workbench and reports
 
-### Company knowledge base and quality system documents
+- **8D.** Link an existing work order and bring in lot measurements and recorded evidence. The report follows D0–D8. Edit containment, 5 Whys, root causes, permanent actions, and rollout to similar processes. Supporting evidence can be added and reviewed as the investigation progresses.
+- **PFMEA and DFMEA.** Document failure chains, effects, causes, and current prevention and detection controls for a process or design. Review S/O/D, RPN, and action priority with the team, then reassess the failure after the actions are in place. Save revisions to revisit later.
+- **Management questions.** Ask what is holding up a work order, what evidence is still needed, or which open issues need attention. The workbench can use recorded work orders, measurements, and saved analyses.
+- **Reports and savings.** Produce weekly, monthly, special investigation, root cause, SPC, and 8D reports in Word. Export 8D and FMEA analyses as Word, Excel, or Markdown and export issue or measurement records for review. Estimate savings using defect rates, volume, and unit loss, then document the reviewed amount, reviewer, and evidence.
 
-Upload your own quality manual, process specifications, or product catalogs. Ask the assistant which work instruction governs acceptance for a given operation. Follow its citations back to the source text.
+### Company knowledge, quality system documents, and training
 
-You can also use existing documents to complete the quality system survey. Total Quality suggests values for applicable standards, products, processes, and quality policy based on the source. Select the values to fill in, then review and save them. Use the completed survey to draft a quality manual, procedures, and work instructions.
+Upload quality manuals, customer requirements, process specifications, or product catalogs. Once indexed, ask what first-piece checks a lot change requires or which instruction governs acceptance for a work step. Follow a citation to the corresponding excerpt. You can also search existing lessons learned for similar cases.
 
-### Reports, lessons learned, and savings
+For the quality system survey, review suggested fields and their supporting source before applying them. Relevant documents can supply values for products, applicable standards, process flows, and quality policy. Company settings can also take a suggested company name. Add missing responsibilities, objectives, audit plans, and sign-off details, then draft a quality manual, procedures, or work instructions. Preview and download the drafts in Markdown. The employee development page records training tasks and actual assessment results, with access to company procedures and lessons for coaching.
 
-Generate weekly, monthly, investigation, and 8D reports in Word from your operating records. Export 8D and FMEA reports in Excel or Markdown. At closure, save the investigation and effective actions for whoever handles a similar issue next. Record inputs such as annual volume and cost per defect to calculate annualized savings and payback.
+## Automation and Approvals
+
+| The platform can | Who makes the decision |
+| --- | --- |
+| Screen accepted measurements immediately and rescan local data on a schedule. | The quality team confirms the source, limits, and lot before accepting an import. |
+| Organize available evidence, suggest actions, assign approved tasks, and record overdue follow-ups. | The owner confirms containment scope, owners, and deadlines, and can edit the plan before approving. |
+| Check submissions for required information and move the work order forward after review. | The people doing the work submit actual results. The lead verifies the original evidence, outcome, and closure criteria. |
+| Prepare a closure report and a lesson learned according to the selected settings. | The lead decides when to close. External reports, ERP inventory holds, and shipment release are handled through the company's existing processes. |
+
+Screening intervals, automatic drafting, dispatch, and archiving can be configured. Assistant questions, model-assisted drafting, and document extraction use the model configured in Harness. Imports, statistics, work orders, approvals, and standard Word reports are available without a model.
 
 ## Resources
 
-- The [installation guide](安装说明.md) covers the plugin manager and command-line installation in Chinese. The English steps are in [Quick Start](#quick-start).
-- The in-app user guide covers intake, plan approval, verification, and closure.
-- Work records and uploaded files are stored locally. The document library holds up to 100 MB. Document questions and form extraction send relevant excerpts to the configured Harness model. Statistics, work orders, and standard reports are available without a configured model.
+- See the [installation guide](安装说明.md) for plugin manager and command-line installation. The in-app user guide explains each step from intake to closure.
+- This release runs inside your local Harness instance. Work records, attachments, and original files stay on the machine. Use imports and local forms to bring in company data. The document library holds up to 100 MB. Document questions and form extraction send relevant excerpts to the configured model.
+- When [reporting an issue or suggesting an improvement](https://github.com/total-quality/dsh-total-quality-v3/issues), include the page and the steps you followed.
 
 ## Releases
 
-[Download the latest release](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) · [Read the changelog](CHANGELOG.md) · [Report an issue](https://github.com/total-quality/dsh-total-quality-v3/issues)
-
-Total Quality is available under the [MIT License](LICENSE.md).
+[Download the latest release](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) · [Changelog](CHANGELOG.md) · [MIT License](LICENSE.md)
