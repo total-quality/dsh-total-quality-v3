@@ -50,6 +50,7 @@ global.Scale = {
   async function go(page, opts) {
     opts = opts || {};
     if (!Pages[page]) page = 'runHub';
+    global.ChatVoice.dispose();
     State.page = page;
     const navigation = State.navigation = (State.navigation || 0) + 1;
     document.querySelectorAll('.nav-item[data-page]').forEach((el) => el.classList.toggle('active', el.getAttribute('data-page') === page));
@@ -183,6 +184,7 @@ global.Scale = {
     }
     if (State.page !== 'aiwb') { await go('aiwb'); }
     const input = document.getElementById('chatInput');
+    global.ChatVoice.mount();
     if (input) { input.value = ''; input.style.height = 'auto'; }
 
     Chat.libraryMode = library;
@@ -363,7 +365,7 @@ global.Scale = {
     /* ---------- 对话 ---------- */
     chatSend: () => { const el = document.getElementById('chatInput'); send(el ? el.value : ''); },
     chatStop: () => { if (Chat.ctrl) { Chat.ctrl.abort(); toast('已请求停止生成', 'warn'); } else toast('当前没有正在生成的内容', 'warn'); },
-    chatClear: () => { Chat.messages = []; Chat.sessionId = 's-' + Date.now(); renderChat(); updateChatMeta(); toast('已开始新会话', 'ok'); },
+    chatClear: () => { global.ChatVoice.mount(); Chat.messages = []; Chat.sessionId = 's-' + Date.now(); renderChat(); updateChatMeta(); toast('已开始新会话', 'ok'); },
     chatHistory: async () => {
       const r = await API.get('/qip-real-v3/api/chats');
       const rows = r.rows || [];
@@ -375,6 +377,7 @@ global.Scale = {
     chatLoad: async (a) => {
       const r = await API.get('/qip-real-v3/api/chats/' + encodeURIComponent(a.id));
       if (!r.row) return toast('会话不存在', 'err');
+      global.ChatVoice.mount();
       Chat.sessionId = a.id;
       Chat.messages = (r.row.messages || []).map((m) => ({ role: m.role, content: m.content, trace: m.trace || [], sources: m.sources || [], pending: [], thinkingDone: true }));
       closeModal(); renderChat(); updateChatMeta(); toast('已载入历史会话', 'ok');
@@ -1269,7 +1272,7 @@ global.Scale = {
   // 聊天输入框：Enter 发送 / Shift+Enter 换行 / 自动高度
   document.addEventListener('keydown', (e) => {
     if (e.target && e.target.id === 'chatInput') {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); Actions.chatSend(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); Actions.chatSend(); }
     }
     if (e.key === 'Escape') { const qt = document.getElementById('qtOverlay'); if (qt) qt.classList.remove('show'); closeNavMenus(); closeModal(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); Actions.openSearch(); }

@@ -42,7 +42,7 @@
 Web 版可用以下命令安装：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.14/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.15/dsh-total-quality-v3.tgz
 ```
 
 ## 业务场景
@@ -113,6 +113,12 @@ dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-
 - [反馈问题或建议](https://github.com/total-quality/dsh-total-quality-v3/issues)时，可以附上使用场景、所在页面和操作步骤。
 
 ## 版本发布
+
+## 在工作台用语音听写
+
+打开「AI 工作助手」，在对话输入框点「语音听写」，允许使用麦克风，说完点「结束录音」。转写内容会进入草稿，确认后再发送。
+
+语音听写使用与 [dsh-voice-mode](https://github.com/qishuilalala/dsh-voice-mode) 相同的中文 Zipformer 识别模型。首次使用会下载约 168 MB 的模型，也可以复用该语音插件已下载并通过校验的模型。录音在运行 Harness 的机器转写，不需要另配语音 API。麦克风需要通过本机地址或 HTTPS 使用。
 
 ## 班组试点
 

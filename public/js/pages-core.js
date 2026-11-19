@@ -30,7 +30,8 @@
   };
 
   Pages.aiwb = {
-    title: 'AI 改进工作台', sub: '自然语言驱动插件协同 · 真实数据 · 真实工具调用',
+    title: 'AI 改进工作台', sub: '查询质量数据、检索文件和生成报告',
+    mount() { global.ChatVoice.mount(); },
     async render() {
       const boot = global.State.bootstrap;
       const tools = (boot.tools || []);
@@ -64,18 +65,34 @@
           </div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-foot">
-            <div class="library-scope"><label class="library-mode"><input id="chatLibraryMode" type="checkbox" ${Chat.libraryMode ? 'checked' : ''}>查知识库</label>
-              ${act('管理知识库文件', 'goto', { page: 'library' }, 'btn btn-sm')}</div>
-            <textarea class="chat-input" id="chatInput" rows="2" placeholder="输入指令，可直接 @插件 定向查询（如「@SPC 检查 CT-0378 判异并给出根因假设」）…&#10;Enter 发送，Shift+Enter 换行"></textarea>
+            <div class="chat-composer">
+              <div class="chat-composer-top">
+                <label class="chat-scope-switch"><input id="chatLibraryMode" type="checkbox" ${Chat.libraryMode ? 'checked' : ''}>查知识库</label>
+                ${act('管理知识库文件', 'goto', { page: 'library' }, 'chat-library-link')}
+              </div>
+              <textarea class="chat-input" id="chatInput" rows="2" aria-label="输入问题" placeholder="想了解哪项质量问题？可以用 @SPC 等名称指定查询。"></textarea>
+              <div class="chat-composer-bar">
+                <div class="chat-dictation">
+                  <button type="button" class="chat-dictation-btn" id="chatVoice" aria-pressed="false">
+                    <span class="chat-mic-icon" aria-hidden="true"></span><span id="chatVoiceLabel">语音听写</span>
+                  </button>
+                  <span class="chat-dictation-meter" id="chatVoiceMeter" aria-hidden="true" hidden><i></i><i></i><i></i><i></i><i></i></span>
+                  <button type="button" class="chat-dictation-cancel" id="chatVoiceCancel" hidden>取消</button>
+                  <output id="chatVoiceStatus" aria-live="polite"></output>
+                </div>
+                <div class="chat-composer-send">
+                  <span class="chat-composer-keyboard">Enter 发送 · Shift+Enter 换行</span>
+                  <span id="chatState" aria-live="polite"></span>
+                  ${act('停止', 'chatStop', {}, 'btn btn-sm')}
+                  ${act('发送', 'chatSend', {}, 'btn btn-primary')}
+                </div>
+              </div>
+            </div>
             <div class="chat-actions">
               <span class="quick-cmd" data-act="quickAsk" data-args='${esc(JSON.stringify({ q: '分析上周产品C 充电口盖间隙超差问题，给出根因假设排序和处置建议' }))}'>分析充电口盖间隙超差根因</span>
               <span class="quick-cmd" data-act="quickAsk" data-args='${esc(JSON.stringify({ q: '@SPC 检查全部关键特性的判异情况，按严重度排序，并给出每个失控特性的排查方向' }))}'>@SPC 全面判异体检</span>
               <span class="quick-cmd" data-act="quickAsk" data-args='${esc(JSON.stringify({ q: '生成本周质量周报（Word 文档）' }))}'>一键生成质量周报</span>
               <span class="quick-cmd" data-act="quickAsk" data-args='${esc(JSON.stringify({ q: '扫描当前质量风险并给出今天最该处理的 3 件事' }))}'>风险扫描＋今日重点</span>
-              <span class="spacer"></span>
-              <span id="chatState" style="font-size:11px;color:#8791a5;"></span>
-              ${act('停止', 'chatStop', {}, 'btn btn-sm')}
-              ${act('发送', 'chatSend', {}, 'btn btn-primary')}
             </div>
           </div>
         </div>

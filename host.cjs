@@ -43,6 +43,7 @@ const qmsSurvey = require('./src/lib/qms-survey');
 const localWorkflows = require('./src/lib/local-workflows');
 const knowledge = require('./src/lib/knowledge-library');
 const library = knowledge.createLibrary(store);
+const voice = require('./src/lib/voice').createVoice();
 const identity = require('./src/lib/signing-identity').createIdentity(store);
 const backups = require('./src/lib/business-backup').createBackups({store,library,reports:OUTPUT_DIR});
 const qualitySkills = require('./src/lib/quality-skills');
@@ -225,6 +226,22 @@ route('PUT', /^\/api\/audit\/retention$/, async (req,res) => {
   sendJson(res,200,{ok:true,archived:store.archiveAudit()});
 });
 
+route('GET', /^\/api\/voice$/, async (req,res) => sendJson(res,200,{ok:true,...voice.status()}));
+route('POST', /^\/api\/voice\/prepare$/, async (req,res) => {
+  voice.prepare();
+  sendJson(res,202,{ok:true,...voice.status()});
+});
+route('POST', /^\/api\/voice\/transcribe$/, async (req,res) => {
+  const cancel = new AbortController();
+  const close = () => cancel.abort();
+  res.once('close',close);
+  try {
+    const result = await voice.transcribe(req,cancel.signal);
+    if (!cancel.signal.aborted) sendJson(res,200,{ok:true,...result});
+  } catch (error) {
+    if (!cancel.signal.aborted) throw error;
+  } finally { res.off('close',close); }
+});
 route('GET', /^\/api\/operations\/schema\.js$/, async (req, res) => sendText(res, 200, fs.readFileSync(path.join(ROOT, 'src/lib/business.js'), 'utf8'), MIME['.js']));
 route('GET', /^\/api\/operations$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.summary() }));
 route('POST', /^\/api\/operations\/scan$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.scan() }));
@@ -1414,6 +1431,7 @@ function handle(req, res) {
           req.signer = identity.actor(req);
           if (!req.signer) return sendJson(res,401,{ok:false,error:'请先登录员工账号'});
           const staffWrite = /^\/api\/operations\/cases(?:$|\/[^/]+\/(?:submit|files)$)/.test(pathname)
+            || /^\/api\/voice\/(?:prepare|transcribe)$/.test(pathname)
             || /^\/api\/signing\/delegations(?:\/|$)/.test(pathname)
             || /^\/api\/signing\/accounts\/[a-f0-9-]+\/password$/.test(pathname);
           if (req.signer.role === 'worker' && !['GET','HEAD'].includes(req.method) && !staffWrite) {

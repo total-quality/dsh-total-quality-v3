@@ -1,6 +1,6 @@
 {
   "name": "dsh-total-quality-v3",
-  "version": "3.0.14",
+  "version": "3.0.15",
   "private": false,
   "type": "module",
   "description": "全质开源质量平台2：独立的 V3 质量运营插件，测量预检与筛查、方案准备、任务派发、执行复核、结案报告与经验沉淀；保留右侧微信服务二维码。",
@@ -13,6 +13,9 @@
   "homepage": "https://github.com/total-quality/dsh-total-quality-v3#readme",
   "bugs": {
     "url": "https://github.com/total-quality/dsh-total-quality-v3/issues"
+  },
+  "dependencies": {
+    "sherpa-onnx-node": "1.13.6"
   },
   "publishConfig": {
     "access": "public",

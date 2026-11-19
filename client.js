@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
           src: BASE + '/?v=' + Date.now(),
           title: brand(),
           style: FRAME_STYLE,
-          allow: 'clipboard-write',
+          allow: 'clipboard-write; microphone',
         }),
       )
     }
