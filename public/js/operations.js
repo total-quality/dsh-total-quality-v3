@@ -78,16 +78,16 @@
     sample: () => { const content = '\uFEFF特性名称,测量值,规格下限,规格上限,批次,工序,产品,单位\n轴套外径,12.02,11.9,12.1,B-示例01,机加工,示例轴套,mm\n轴套外径,12.03,11.9,12.1,B-示例01,机加工,示例轴套,mm\n轴套外径,12.13,11.9,12.1,B-示例01,机加工,示例轴套,mm\n'; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' })); a.download = '测量接收模板.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); },
     policy: () => modal({ title: '自动化策略', sub: '作用于当前插件的本地数据与站内待办', body: form('policy', ['enabled', 'autoDraft', 'internalDispatch', 'autoReport', 'autoKnowledge'].map((k, i) => `<label><input type="checkbox" name="${k}" ${S.data.policy[k] ? 'checked' : ''}> ${['定时与数据变化筛查', '模型自动准备处理方案', '自动派发站内待办', '结案自动生成报告', '结案自动沉淀经验'][i]}</label>`).join('') + field('筛查间隔（小时）', 'scanHours', S.data.policy.scanHours, 'number') + field('超期催办间隔（小时）', 'reminderHours', S.data.policy.reminderHours, 'number') + note('方案批准、执行结果复核和结案决定始终由管理者确认。催办记录保存在站内，不自动向外发送消息。'), '保存策略') }),
     guide: () => modal({ title: '使用指南 · 全质开源质量平台2', sub: '从接收到归档，沿一张工作单完成', body: '<div class="op-guide">' + [['接收资料', '在“接收与追溯”上传测量文件，先看预检结果，再确认接收。也可以直接录入质量问题、客诉或变更申请。'], ['核对并批准方案', '在“确认与纠正”打开工作单，核对事实、处理动作、责任人与期限；需要调整就在原处保存，再一键批准。'], ['现场执行与结果复核', '任务自动进入站内待办。责任人在同一工作单填写实际结果与证据，管理者批准或写明意见退回；每次提交都保留。'], ['补齐验证并结案', '在业务关联区核对数量平衡、连续批次数据与文件更新。全部阶段接受后确认结案，按策略生成报告和经验。'], ['管理问答与分析', '改进工作台可选择关联工作单与分析模式。系统自动带入现有资料，未知的原因和事实继续标记待核实。']].map(([t, p], i) => `<section><b>0${i + 1}</b><div><h3>${t}</h3><p>${p}</p></div></section>`).join('') + '</div>' }),
-    workbench: () => go('opsWorkbench'), analyzeCase: (id) => { S.workbenchCase = id; closeModal(); go('opsWorkbench'); },
+    workbench: () => go('opsWorkbench'), analyzeCase: (id) => { S.workbenchCase = id; S.editingSkill = null; S.workbenchMode = 'review'; closeModal(); go('opsWorkbench'); },
   };
   document.addEventListener('input', (e) => { const f = e.target.closest('form[data-op-form]'); if (f) f.dataset.dirty = '1'; });
-  document.addEventListener('change', (e) => { const f = e.target.closest('form[data-op-form]'); if (f) f.dataset.dirty = '1'; if (f?.dataset.opForm === 'analysis' && e.target.name === 'mode') f.querySelectorAll('[data-mode-fields]').forEach((el) => { el.hidden = el.dataset.modeFields !== e.target.value; el.disabled = el.hidden; }); });
+  document.addEventListener('change', (e) => { const f = e.target.closest('form[data-op-form]'); if (f) f.dataset.dirty = '1';  });
   document.addEventListener('click', async (e) => { const b = e.target.closest('[data-op]'); if (!b) return; e.preventDefault(); const fn = handlers[b.dataset.op]; if (!fn || S.busy) return; S.busy = true; b.disabled = true; try { await fn(b.dataset.id); } catch (err) { toast(err.message, 'err', 8000); } finally { S.busy = false; if (b.isConnected) b.disabled = false; } });
   document.addEventListener('submit', async (e) => { const f = e.target.closest('form[data-op-form]'); if (!f) return; e.preventDefault(); if (S.busy) return; S.busy = true; const submit = f.querySelector('button[type=submit]'); submit.disabled = true; const values = Object.fromEntries(new FormData(f)); const kind = f.dataset.opForm, id = f.dataset.id; let body = { ...values, version: S.active?.version };
     try {
       if (kind === 'new') { const r = await API.post(base + '/cases', values); await detail(r.row.id); }
       else if (kind === 'policy') { body = { scanHours: Number(values.scanHours), reminderHours: Number(values.reminderHours) }; for (const k of ['enabled', 'autoDraft', 'internalDispatch', 'autoReport', 'autoKnowledge']) body[k] = !!f.elements[k].checked; await API.put(base + '/policy', body); closeModal(); await go('runHub'); }
-      else if (kind === 'analysis') await runAnalysis(f, values);
+      else if (kind === 'analysis' || kind === 'skillEdit') await runAnalysis(f, values);
       else if (kind === 'analysisEdit') { const r = (await API.put(base + '/analysis/' + encodeURIComponent(id), values)).row; const panel = f.closest('[data-analysis-record]'); if (panel) panel.outerHTML = renderAnalysis(r); await refreshAnalysisList(); }
       else {
         if (kind === 'plan') body = { version: S.active.version, risk: values.risk, plan: { action: values.action, verification: values.verification, owner: values.owner, due: values.due ? new Date(values.due).toISOString() : '' } };
@@ -110,15 +110,64 @@
   // Workbench is shared by local analysis modes and the existing free-form Harness chat.
   const analysisList = (records) => records.slice(0, 15).map((r) => `<div class="op-import"><div><b>${esc(r.title)}</b><small>${esc(dt(r.updatedAt || r.createdAt))} · 第 ${r.version || 1} 版</small></div>${button('analysisRecord', '查看', r.id, 'btn-sm')}</div>`).join('') || empty('暂无记录');
   async function refreshAnalysisList() { const list = document.getElementById('opAnalysisList'); if (list) list.innerHTML = analysisList((await API.get(base + '/analysis')).rows); }
-  async function runAnalysis(f, values) { const result = await API.post(base + '/analysis', values); const out = document.getElementById('opAnalysis'); if (out) out.innerHTML = renderAnalysis(result.row); f.dataset.dirty = ''; await refreshAnalysisList(); }
-  function renderAnalysis(r) { return `<section data-analysis-record="${esc(r.id)}">` + card(r.title, r.source + ' · 第 ' + (r.version || 1) + ' 版 · ' + dt(r.updatedAt || r.createdAt), `${r.modelError ? note('模型提示：' + r.modelError, 'warn') : ''}<pre class="op-text">${esc(r.outputs)}</pre><a class="btn" href="${base}/analysis/${encodeURIComponent(r.id)}/download">下载分析记录</a>${r.qmsDocId ? note('该手册草稿已同步到体系文件，修订时会一并更新。') : ''}<details><summary>核对并修订草稿</summary>${form('analysisEdit', `<input type="hidden" name="version" value="${r.version || 1}">` + field('标题', 'title', r.title, 'text', true) + field('正文', 'outputs', r.outputs, 'textarea', true), '保存修订版本', r.id)}</details>`) + '</section>'; }
-  g.Pages.opsWorkbench = { title: '改进工作台', sub: '选择分析模式，自动带入关联工作单资料', async render() {
-    const d = await load(), records = (await API.get(base + '/analysis')).rows;
-    const survey = (await API.get('/qip-real-v3/api/qms/survey')).survey || {};
-    const manualFields = '<fieldset class="full op-mode-fields" data-mode-fields="manual" hidden disabled><legend>企业资料（沿用已保存的体系调研，可调整）</legend>' + [['manualCompany', '企业名称', survey.company], ['manualProducts', '产品与服务', survey.products], ['manualScope', '业务及适用范围', survey.scope], ['manualProcess', '主要流程', survey.processFlow], ['manualRoles', '岗位职责', (survey.roles || survey.teamMembers)], ['manualControls', '检验、放行与追溯', survey.controls], ['manualRisks', '主要风险与质量目标', [survey.risks, survey.objective].filter(Boolean).join('\n')]].map(([name, label, value]) => field(label, name, value || '', name === 'manualCompany' ? 'text' : 'textarea', true)).join('') + '</fieldset>';
-    const ratings = '<fieldset class="full op-mode-fields" data-mode-fields="fmea" hidden disabled><legend>团队 S / O / D 评分（可留空）</legend>' + note('评分须按适用评价表核对。填写时三项一起填写，取 1～10 整数；RPN 只用于辅助排序，不代替 AP。') + field('严重度 S', 'severity', '', 'number') + field('发生度 O', 'occurrence', '', 'number') + field('探测度 D', 'detection', '', 'number') + '</fieldset>';
-    return heading('带着事实，讨论下一步。', '工作单、执行记录、测量摘要和业务关联可一起核对。', `<button class="btn" data-act="goto" data-args='{"page":"aiwb"}'>自由问答</button>`) + '<div class="op-grid"><section>' + card('分析与管理问答', '选择模式后，可补充问题与约束；草稿自动留档，并可人工修订', form('analysis', select('分析模式', 'mode', [['review', '核对与行动建议'], ['8d', '8D 报告草稿'], ['why', '5Why 原因验证'], ['fmea', 'FMEA 风险梳理'], ['spc', 'SPC / 过程能力'], ['manual', '质量手册草稿']], 'review') + select('关联工作单', 'caseId', [['', '当前运营总览'], ...d.cases.map((c) => [c.id, c.number + ' ' + c.title])], S.workbenchCase || '') + field('问题 / 关注点 / 约束条件', 'question', '请核对当前资料，列出下一步、责任人、时限、验证方式与待确认项。', 'textarea', true) + ratings + manualFields, '生成并保存分析记录')) + '<div id="opAnalysis"></div></section><aside>' + card('已保存分析', '记录与工作单保存在同一本地数据库', '<div id="opAnalysisList">' + analysisList(records) + '</div>') + '</aside></div>';
-  } };
-  handlers.analysisRecord = async (id) => { const r = (await API.get(base + '/analysis')).rows.find((v) => v.id === id); if (r) modal({ title: r.title, body: renderAnalysis(r) }); };
-  g.OperationsUI = { detail, receiveFile, state: S };
+  const Skills = g.QSkills;
+  async function runAnalysis(f, values) {
+    const mode = f.elements.mode.value;
+    const skill = Skills.supported(mode);
+    const out = document.getElementById('opAnalysis');
+    const result = f.dataset.editingMode
+      ? await API.put(base + '/analysis/' + encodeURIComponent(f.dataset.id), { caseId: values.caseId, version: values.version, skill: Skills.read(f, mode) })
+      : await API.post(base + '/analysis', skill ? { mode, caseId: values.caseId, skill: Skills.read(f, mode) } : values);
+    f.dataset.dirty = '';
+    if (out?.isConnected) {
+      if (f.dataset.editingMode) { S.editingSkill = result.row; f.elements.version.value = result.row.version; }
+      out.innerHTML = renderAnalysis(result.row);
+      if (skill) out.scrollIntoView({ block: 'start' });
+    }
+    await refreshAnalysisList();
+  }
+  function renderAnalysis(r) {
+    const download = `${base}/analysis/${encodeURIComponent(r.id)}/download`;
+    const content = r.skillReport ? Skills.preview(r) + `<div class="op-actions skill-export"><a class="btn" href="${download}?format=docx">下载 Word</a><a class="btn" href="${download}?format=xlsx">下载 Excel</a><a class="btn" href="${download}">下载 Markdown</a>${button('skillEdit', '修订报告表单', r.id)}</div>`
+      : `<pre class="op-text">${esc(r.outputs)}</pre><a class="btn" href="${download}">下载分析记录</a>${r.qmsDocId ? note('该手册草稿已同步到体系文件，修订时会一并更新。') : ''}<details><summary>核对并修订草稿</summary>${form('analysisEdit', `<input type="hidden" name="version" value="${r.version || 1}">` + field('标题', 'title', r.title, 'text', true) + field('正文', 'outputs', r.outputs, 'textarea', true), '保存修订版本', r.id)}</details>`;
+    return `<section data-analysis-record="${esc(r.id)}">` + card(r.title, r.source + ' · 第 ' + (r.version || 1) + ' 版 · ' + dt(r.updatedAt || r.createdAt), (r.modelError ? note('模型提示：' + r.modelError, 'warn') : '') + content) + '</section>';
+  }
+  function openSkill(mode) {
+    S.workbenchCase = document.querySelector('#content form[data-op-form] [name="caseId"]')?.value || '';
+    S.workbenchMode = mode;
+    S.editingSkill = null;
+    return go('opsWorkbench');
+  }
+  g.Pages.opsWorkbench = { title: '改进工作台', sub: '选择分析模式，自动带入关联工作单资料',
+    mount() {
+      const f = document.querySelector('form[data-op-form="analysis"], form[data-op-form="skillEdit"]');
+      f.dataset.editingMode = S.editingSkill?.tool || '';
+      Skills.mount(f, S.data.cases);
+    },
+    async render() {
+      const [d, { rows: records }, { survey }, { templates }] = await Promise.all([load(), API.get(base + '/analysis'), API.get('/qip-real-v3/api/qms/survey'), API.get(base + '/skill-templates')]);
+      const companySurvey = survey || {};
+      const editing = S.editingSkill;
+      const mode = editing?.tool || S.workbenchMode || 'review';
+      const caseId = editing?.caseId ?? S.workbenchCase ?? '';
+      const choices = [['review', '核对与行动建议'], ['8d', '8D 报告草稿'], ['why', '5Why 原因验证'], ['fmea', 'PFMEA / DFMEA 分析'], ['spc', 'SPC / 过程能力'], ['manual', '质量手册草稿']];
+      const manual = `<fieldset class="full op-mode-fields" data-mode-fields="manual" ${mode === 'manual' ? '' : 'hidden disabled'}><legend>企业资料（沿用已保存的体系调研，可调整）</legend>` + [['manualCompany', '企业名称', companySurvey.company], ['manualProducts', '产品与服务', companySurvey.products], ['manualScope', '业务及适用范围', companySurvey.scope], ['manualProcess', '主要流程', companySurvey.processFlow], ['manualRoles', '岗位职责', (companySurvey.roles || companySurvey.teamMembers)], ['manualControls', '检验、放行与追溯', companySurvey.controls], ['manualRisks', '主要风险与质量目标', [companySurvey.risks, companySurvey.objective].filter(Boolean).join('\n')]].map(([name, label, value]) => field(label, name, value || '', name === 'manualCompany' ? 'text' : 'textarea', true)).join('') + '</fieldset>';
+      const analysisFields = (editing ? `<input type="hidden" name="mode" value="${esc(mode)}"><input type="hidden" name="version" value="${editing.version}">` : select('分析模式', 'mode', choices, mode))
+        + select('关联工作单', 'caseId', [['', '不关联工作单'], ...d.cases.map((c) => [c.id, c.number + ' ' + c.title])], caseId)
+        + field('问题 / 关注点 / 约束条件', 'question', '请核对当前资料，列出下一步、责任人、时限、验证方式与待确认项。', 'textarea', true)
+        + ['8d', 'fmea'].map((key) => Skills.render(key, mode, templates[key], editing)).join('') + manual;
+      return heading('带着事实，讨论下一步。', '工作单、执行记录、测量摘要和业务关联可一起核对。', `<div class="op-actions">${editing ? button('skillNew', '新建分析') : ''}<button class="btn" data-act="goto" data-args='{"page":"aiwb"}'>自由问答</button></div>`) + '<div class="op-grid"><section>'
+        + card(editing ? '修订 · ' + editing.title : '分析与管理问答', editing ? '保存后更新同一份记录，并保留上一版本。关联工作单的证据以本次保存时为准。' : '选取分析模式、填写资料，结果留档供核对。', form(editing ? 'skillEdit' : 'analysis', analysisFields, '生成并保存分析记录', editing?.id || ''))
+        + '<div id="opAnalysis">' + (editing ? renderAnalysis(editing) : '') + '</div></section><aside>' + card('已保存分析', '记录与工作单保存在同一本地数据库', '<div id="opAnalysisList">' + analysisList(records) + '</div>') + '</aside></div>';
+    },
+  };
+  async function findAnalysis(id) {
+    const r = (await API.get(base + '/analysis')).rows.find((v) => v.id === id);
+    if (!r) throw Error('这份分析记录已不存在');
+    return r;
+  }
+  handlers.analysisRecord = async (id) => { const r = await findAnalysis(id); modal({ title: r.title, body: renderAnalysis(r) }); };
+  handlers.skillEdit = async (id) => { S.editingSkill = await findAnalysis(id); closeModal(); await go('opsWorkbench'); };
+  handlers.skillNew = () => openSkill(S.editingSkill.tool);
+  g.OperationsUI = { detail, receiveFile, state: S, openSkill };
 })(window);

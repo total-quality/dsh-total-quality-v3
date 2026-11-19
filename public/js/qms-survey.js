@@ -180,6 +180,7 @@
       const values = draft?.revision === (survey?.revision || 0) ? draft.values : survey || {};
       return `<div class="survey-shell">
         ${header('qmsSurvey', '体系调研', '按模块填写企业资料，保存后供体系文件引用。')}
+        <div class="survey-preferences"><span>已有企业手册、流程或质量方针？可先从知识库提取候选值。</span><button type="button" class="btn" data-survey-library>从知识库带入</button></div>
         <form class="survey-form" id="qmsSurveyForm" novalidate>
           <div class="survey-layout">
             <aside class="survey-side">
@@ -216,6 +217,23 @@
       selectSection(form, selected);
       updateProgress(form);
       form.addEventListener('input', () => changed(form));
+      document.querySelector('[data-survey-library]').addEventListener('click', () => {
+        QipLibrary.openSuggestions('survey', {
+          isCurrent: () => form.isConnected,
+          read: () => readSurvey(form),
+          apply: (values) => {
+            for (const [field, value] of Object.entries(values)) {
+              if (field === 'certs') {
+                form.querySelectorAll('[name="certs"]').forEach((option) => { option.checked = value.includes(option.value); });
+              } else if (form.elements[field] && !form.elements[field].readOnly) {
+                form.elements[field].value = value;
+              }
+            }
+            changed(form);
+            showMissing(form, Object.keys(values)[0]);
+          },
+        }).catch((error) => toast(error.message, 'err'));
+      });
       form.addEventListener('submit', event => event.preventDefault());
       form.addEventListener('click', event => {
         const button = event.target.closest('button');
@@ -270,7 +288,7 @@
       return `<div class="survey-shell">
         ${header('init', '企业设置', '在这里维护企业名称。体系调研、看板和报表沿用已保存的设置。')}
         <section class="survey-panel survey-enterprise">
-          <h2>公司与部门</h2>
+          <div class="op-actions"><h2>公司与部门</h2>${act('从知识库带入', 'libraryNaming', {}, 'btn')}</div>
           <div class="survey-fields">
             <label>公司名称${input('nmCompany', naming.company)}</label>
             <label>归口部门${input('nmDept', naming.dept)}</label>

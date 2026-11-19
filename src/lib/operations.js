@@ -6,6 +6,7 @@ const path = require('node:path');
 const Business = require('./business');
 const stats = require('./stats');
 const office = require('./office');
+const skills = require('./quality-skills');
 const LABELS = { plan_review: '方案待确认', needs_info: '需补充资料', executing: '执行跟进中', result_review: '执行结果待复核', close_review: '结案待确认', closed: '已归档' };
 const DEFAULT_POLICY = { enabled: true, autoDraft: true, internalDispatch: true, autoReport: true, autoKnowledge: true, scanHours: 1, reminderHours: 24 };
 const STEPS = [['contain', '围堵与影响范围'], ['cause', '发生与流出原因验证'], ['correct', '纠正与标准更新'], ['verify', '连续批次效果验证']];
@@ -201,8 +202,28 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     for (const k of ['scanHours', 'reminderHours']) if (input[k] !== undefined) { if (!Number.isInteger(input[k]) || input[k] < 1 || input[k] > 168) fail('时间间隔须为 1～168 小时'); p[k] = input[k]; }
     return tx(() => { store.setSetting('operations.policy', p); event(null, '已调整本地运营策略；方案、执行复核和结案仍由人工确认', false); return p; });
   }
+  function saveSkill(mode, caseId, input, previous) {
+    const c = caseId ? resolve(caseId) : null;
+    const measurements = mode === '8d' && c?.charId && c.batch ? groups().filter((g) => g.ch.id === c.charId && g.batch === c.batch)
+      .map((g) => ({ name: g.ch.name, batch: g.batch, ...batchStats(g.rows, g.ch) })) : [];
+    const { inputs, ...skillReport } = skills.build(mode, input, c, measurements);
+    const title = (mode === '8d' ? '8D 报告草稿' : inputs.type + ' 报告草稿') + ' · ' + inputs.product;
+    const outputs = skills.markdown(skillReport);
+    const source = '结构化 Skill草稿 · ' + skillReport.template + '模板';
+    const data = { title, tool: mode, outputs, source, skillReport, inputs: { skill: inputs, caseId: c?.id || '', version: c?.version ?? null }, caseId: c?.id || '', issueId: c?.issueId || '' };
+    return tx(() => {
+      if (previous) {
+        previous.revisions = (previous.revisions || []).concat([{ version: previous.version, title: previous.title, outputs: previous.outputs, inputs: previous.inputs, at: clock() }]).slice(-20);
+        Object.assign(previous, data, { version: previous.version + 1, updatedAt: clock() });
+      }
+      const row = previous || store.col('analysisRecords').insert({ ...data, version: 1, author: '管理者', createdAt: clock() });
+      event(null, (previous ? '已修订 Skill 草稿：' : '已保存 Skill 草稿：') + title, false);
+      return clone(row);
+    });
+  }
   async function analyze(input) {
     requireObject(input); const mode = input.mode || 'review'; if (!['review', '8d', 'why', 'fmea', 'spc', 'manual'].includes(mode)) fail('分析模式无效');
+    if (Object.hasOwn(input, 'skill')) return saveSkill(mode, input.caseId, input.skill);
     const question = text(input.question || '核对当前资料与下一步行动', '问题', 1, 4000);
     const c = input.caseId ? clone(resolve(input.caseId)) : null;
     const context = c ? { workOrder: c, business: Business.assessBusiness(c.business, c), measurements: summary().batches.filter((b) => b.charId === c.charId || b.batch === c.batch) } : { cases: summary().cases.filter((v) => v.status !== 'closed').slice(0, 12), batches: summary().batches.slice(0, 12) };
@@ -237,6 +258,7 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
   function editAnalysis(id, input) {
     requireObject(input); const row = store.col('analysisRecords').get(id); if (!row) fail('分析记录不存在',404);
     if (Number(input.version) !== (row.version || 1)) fail('分析记录已被更新，请重新打开后修改',409);
+    if (row.skillReport) return saveSkill(row.tool, input.caseId, input.skill, row);
     const outputs = text(input.outputs,'分析正文',10,100000), title = text(input.title || row.title,'标题',2,300);
     return tx(() => { row.revisions = (row.revisions || []).concat([{version:row.version || 1,outputs:row.outputs,at:clock()}]).slice(-20); row.outputs=outputs;row.title=title;row.version=(row.version || 1)+1;row.updatedAt=clock();
       if(row.qmsDocId){const doc=store.getSetting('qmsDocs',[]).find((d)=>d.id===row.qmsDocId);if(doc){doc.content=outputs;doc.title=title;doc.updatedAt=clock();}}

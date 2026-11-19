@@ -39,6 +39,9 @@ function writeScale(scale) {
 const store = require('./src/lib/store');
 const qms = require('./src/lib/qms');
 const qmsSurvey = require('./src/lib/qms-survey');
+const knowledge = require('./src/lib/knowledge-library');
+const library = knowledge.createLibrary(store);
+const qualitySkills = require('./src/lib/quality-skills');
 const agent = require('./agent-host.cjs');
 const registry = require('./src/tools/registry');
 require('./src/tools/data');
@@ -83,17 +86,23 @@ function readBody(req, maxBytes = 60 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
-    req.on('data', (c) => {
+    function receive(c) {
       size += c.length;
-      if (size > maxBytes) { reject(new Error('请求体过大（上限 ' + Math.round(maxBytes / 1048576) + 'MB）')); req.destroy(); return; }
+      if (size > maxBytes) {
+        req.off('data', receive);
+        chunks.length = 0;
+        reject(Object.assign(new Error('请求体过大（上限 ' + Math.round(maxBytes / 1048576) + ' MB）'), { status: 413 }));
+        return;
+      }
       chunks.push(c);
-    });
+    }
+    req.on('data', receive);
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
-async function readJson(req) {
-  const b = await readBody(req);
+async function readJson(req, limit) {
+  const b = await readBody(req, limit);
   if (!b.length) return {};
   try { return JSON.parse(b.toString('utf8')); } catch (e) { throw new Error('请求体不是合法 JSON'); }
 }
@@ -158,11 +167,21 @@ route('GET', /^\/api\/operations\/events$/, async (req, res) => {
   send(); const off = store.on(send); const heartbeat = setInterval(() => { if (!res.destroyed) res.write(': heartbeat\n\n'); }, 15000); heartbeat.unref?.();
   res.on('close', () => { off(); clearInterval(heartbeat); });
 });
+route('GET', /^\/api\/operations\/skill-templates$/, async (req, res) => sendJson(res, 200, { ok: true, templates: qualitySkills.templates }));
 route('GET', /^\/api\/operations\/analysis$/, async (req, res) => sendJson(res, 200, { ok: true, rows: store.col('analysisRecords').all().slice().reverse() }));
 route('POST', /^\/api\/operations\/analysis$/, async (req, res) => sendJson(res, 201, { ok: true, row: await operations.analyze(await readJson(req)) }));
 route('PUT', /^\/api\/operations\/analysis\/([^/]+)$/, async (req,res,id) => sendJson(res,200,{ok:true,row:operations.editAnalysis(id,await readJson(req))}));
 route('GET', /^\/api\/operations\/analysis\/([^/]+)\/download$/, async (req, res, id) => {
   const row = store.col('analysisRecords').get(id); if (!row) return sendJson(res, 404, { ok: false, error: '分析记录不存在' });
+  const format = new URL(req.url, 'http://x').searchParams.get('format');
+  if (row.skillReport && (format === 'docx' || format === 'xlsx')) {
+    const office = require('./src/lib/office');
+    const bytes = format === 'docx' ? office.docxWrite(qualitySkills.docxBlocks(row)) : office.xlsxWrite(row.skillReport.sections.map((s, i) => ({
+      name: '章节 ' + (i + 1), headerRow: false, rows: [[s.title], ...s.tables.flatMap((t) => [[t.title], t.header, ...t.rows.map((cells) => cells.map((v) => typeof v === 'number' ? v : qualitySkills.got(v))), []])],
+    })));
+    res.writeHead(200, { 'Content-Type': MIME['.' + format], 'Content-Disposition': 'attachment; filename="analysis-' + encodeURIComponent(id) + '.' + format + '"', 'Content-Length': bytes.length });
+    return res.end(bytes);
+  }
   res.setHeader('Content-Disposition', 'attachment; filename="analysis-' + encodeURIComponent(id) + '.md"');
   sendText(res, 200, '# ' + row.title + '\n\n' + row.source + '\n\n' + row.outputs, MIME['.md']);
 });
@@ -512,9 +531,77 @@ route('POST', /^\/api\/tools\/([^/]+)$/, async (req, res, name) => {
   }
 });
 
+/* Personal document library, independent of the legacy example/experience cards. */
+function allowLibraryAccess(req) {
+  const origin = req.headers.origin;
+  if (req.headers['sec-fetch-site'] === 'cross-site' || (origin && origin !== 'http://' + req.headers.host && origin !== 'https://' + req.headers.host)) {
+    throw Object.assign(new Error('请从插件页面访问知识库'), { status: 403 });
+  }
+}
+function requestSignal(res) {
+  const ac = new AbortController();
+  res.once('close', () => ac.abort());
+  return ac.signal;
+}
+
+route('GET', /^\/api\/library$/, async (req, res) => {
+  allowLibraryAccess(req);
+  sendJson(res, 200, { ok: true, documents: library.list(), formats: knowledge.formats, embeddingEnabled: library.embeddingEnabled });
+});
+route('POST', /^\/api\/library$/, async (req, res) => {
+  allowLibraryAccess(req);
+  const raw = req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() === 'application/octet-stream';
+  // The payload ceiling follows the total library quota. Legacy JSON needs base64 overhead.
+  const input = raw
+    ? { filename: qs(req).filename, bytes: await readBody(req, knowledge.MAX_LIBRARY) }
+    : await readJson(req, Math.ceil(knowledge.MAX_LIBRARY / 3) * 4 + 8192);
+  const result = library.upload(input);
+  sendJson(res, result.duplicate ? 200 : 202, { ok: true, ...result });
+});
+route('GET', /^\/api\/library\/search$/, async (req, res) => {
+  allowLibraryAccess(req);
+  const { q, id } = qs(req);
+  sendJson(res, 200, { ok: true, excerpts: library.search(q, { id }) });
+});
+route('GET', /^\/api\/library\/([a-f0-9-]+)\/parts\/(\d+)$/, async (req, res, id, part) => {
+  allowLibraryAccess(req);
+  sendJson(res, 200, { ok: true, excerpt: library.context(library.excerpt(id, Number(part))) });
+});
+route('GET', /^\/api\/library\/([a-f0-9-]+)\/download$/, async (req, res, id) => {
+  allowLibraryAccess(req);
+  const row = library.original(id);
+  res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(row.name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16)),
+    'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Length': row.original.length });
+  res.end(Buffer.from(row.original));
+});
+route('POST', /^\/api\/library\/([a-f0-9-]+)\/retry$/, async (req, res, id) => {
+  allowLibraryAccess(req);
+  library.retry(id);
+  sendJson(res, 202, { ok: true });
+});
+route('DELETE', /^\/api\/library\/([a-f0-9-]+)$/, async (req, res, id) => {
+  allowLibraryAccess(req);
+  library.remove(id);
+  sendJson(res, 200, { ok: true });
+});
+route('POST', /^\/api\/library\/suggestions$/, async (req, res) => {
+  allowLibraryAccess(req);
+  const signal = AbortSignal.any([requestSignal(res), AbortSignal.timeout(65000)]);
+  const body = await readJson(req, 4096);
+  const candidates = await knowledge.suggestions(library, runtime.model && runtime.llm, body?.target, body?.documentId ?? '', signal);
+  sendJson(res, 200, { ok: true, candidates });
+});
+
 /* ---------------- 对话（SSE 流式） ---------------- */
 route('POST', /^\/api\/chat\/stream$/, async (req, res) => {
   const body = await readJson(req);
+  const libraryMode = body.scope === 'library';
+  if (libraryMode) {
+    allowLibraryAccess(req);
+    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 4000) {
+      return sendJson(res, 400, { ok: false, error: '请填写不超过 4000 字的知识库问题' });
+    }
+  }
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
@@ -524,23 +611,30 @@ route('POST', /^\/api\/chat\/stream$/, async (req, res) => {
   const send = (obj) => { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch (_) {} };
   send({ type: 'connected' });
 
-  const ac = new AbortController();
-  req.on('close', () => ac.abort());
+  const signal = requestSignal(res);
 
   const sessionId = body.sessionId || 'default';
   const settings = store.db.settings || {};
   const history = Array.isArray(body.history) ? body.history : [];
 
   try {
-    const result = await agent.run({
-      text: body.text, sessionId, settings, history, signal: ac.signal, outputDir: OUTPUT_DIR,
-    }, send);
+    let result;
+    if (libraryMode) {
+      send({ type: 'library_search' });
+      result = { ok: true, ...await knowledge.answer(library, runtime.model && runtime.llm, body.text.trim(), history,
+        AbortSignal.any([signal, AbortSignal.timeout(65000)])) };
+      if (signal.aborted) return;
+      send({ type: 'content', text: result.content });
+      send({ type: 'library_sources', sources: result.sources });
+    } else {
+      result = await agent.run({ text: body.text, sessionId, settings, history, signal, outputDir: OUTPUT_DIR }, send);
+    }
     // 保存会话
     if (body.saveHistory !== false && result && result.ok) {
       let chat = store.col('chats').get(sessionId);
       const msgs = (chat ? chat.messages : []).concat([
         { role: 'user', content: body.text, ts: new Date().toISOString() },
-        { role: 'assistant', content: result.content, ts: new Date().toISOString(), trace: result.trace, usage: result.usage },
+        { role: 'assistant', content: result.content, ts: new Date().toISOString(), trace: result.trace, usage: result.usage, sources: result.sources },
       ]);
       if (chat) store.col('chats').update(sessionId, { messages: msgs, updatedAt: new Date().toISOString() });
       else store.col('chats').insert({ id: sessionId, title: String(body.text).slice(0, 30), messages: msgs });
@@ -1066,6 +1160,7 @@ function init() {
     }
     store.saveSync(true); // 保证库/文件在启动时就是落盘状态
     operations.start();
+    library.start();
     // 定时强制落盘：插件写操作走 400ms 防抖，这里兜底，避免异常退出丢数据
     const timer = setInterval(() => store.saveSync(), 5000);
     if (timer.unref) timer.unref();

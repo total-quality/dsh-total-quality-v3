@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="js/operations.css">
 <link rel="stylesheet" href="js/qms-survey.css">
+<link rel="stylesheet" href="js/knowledge-library.css">
 </head>
 <body>
 <div class="app">
@@ -68,6 +69,7 @@
       <div class="nav-menu">
         <div class="nav-item nav-parent">知识与团队<span class="caret">▾</span></div>
         <div class="nav-drop">
+          <div class="nav-item" data-page="library">知识库文件</div>
           <div class="nav-item" data-page="knowledge">知识库与经验传承</div>
           <div class="nav-item" data-page="growth">员工成长中心</div>
         </div>
@@ -110,9 +112,9 @@
 <!-- 质量工具菜单（三列） -->
 <div class="qt-overlay" id="qtOverlay">
   <div class="qt-panel">
-    <div class="qt-head"><span class="t">质量工具 skill</span><span class="s">点击即用 · 数据类工具由统计引擎实算</span><span class="dm-close" style="margin-left:auto;" data-act="qtClose">✕</span></div>
+    <div class="qt-head"><span class="t">质量工具 skill</span><span class="s">报告工作流 · 数据计算 · 问答引导</span><span class="dm-close" style="margin-left:auto;" data-act="qtClose">✕</span></div>
     <div class="qt-grid" id="qtGrid"></div>
-    <div class="qt-foot">带 <b>∑</b> 标记的工具会真实计算并返回结果（可用平台已有数据或您输入的数据）；其余工具由 AI 智能体引导完成。</div>
+    <div class="qt-foot">报告工具打开可编辑表单并保存报告。带 ∑ 标记的工具执行计算或查询。问答工具先填入可修改的问题，确认后手动发送。</div>
   </div>
 </div>
 
@@ -124,11 +126,13 @@
   <script src="js/pages-core.js"></script>
 <script src="js/pages-analytics.js"></script>
 <script src="js/pages-kb.js"></script>
+<script src="js/knowledge-library.js"></script>
 <script src="js/pages-system.js"></script>
 <script src="js/pages-qms.js"></script>
 <script src="js/qms-survey.js"></script>
 <script src="js/tool-wizards.js"></script>
 <script src="api/operations/schema.js"></script>
+<script src="js/quality-skills.js"></script>
 <script src="js/operations.js"></script>
 <script src="app.js"></script>
 </body>

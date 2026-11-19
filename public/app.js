@@ -170,11 +170,12 @@ global.Scale = {
     if (force || near) b.scrollTop = b.scrollHeight;
   }
 
-  async function send(text) {
+  async function send(text, scope) {
     if (Chat.busy) { toast('正在生成中，请先等待或点击停止', 'warn'); return; }
     const q = String(text || '').trim();
     if (!q) return;
-    if (!State.bootstrap || !(State.bootstrap.settings.llm || {}).hasApiKey) {
+    const library = scope === 'library' || (scope !== 'tools' && !!document.getElementById('chatLibraryMode')?.checked);
+    if (!library && (!State.bootstrap || !(State.bootstrap.settings.llm || {}).hasApiKey)) {
       toast('尚未配置大模型 API Key，正在跳转设置页…', 'warn');
       setTimeout(() => go('settings'), 600);
       return;
@@ -183,6 +184,8 @@ global.Scale = {
     const input = document.getElementById('chatInput');
     if (input) { input.value = ''; input.style.height = 'auto'; }
 
+    Chat.libraryMode = library;
+    if (document.getElementById('chatLibraryMode')) document.getElementById('chatLibraryMode').checked = library;
     Chat.messages.push({ role: 'user', content: q, ts: Date.now() });
     const am = { role: 'assistant', content: '', thinking: '', thinkingDone: false, trace: [], pending: [], running: true, statusText: '正在理解问题…', ts: Date.now() };
     Chat.messages.push(am);
@@ -198,11 +201,15 @@ global.Scale = {
     let toolSeq = {};
 
     try {
-      await API.chat({ text: q, sessionId: Chat.sessionId, history }, (ev) => {
+      await API.chat({ text: q, sessionId: Chat.sessionId, history, scope: library ? 'library' : 'tools' }, (ev) => {
         switch (ev.type) {
           case 'start':
             am.statusText = '已连接模型（' + ev.model + '，' + ev.tools + ' 个工具可用）';
             scheduleChatRender(); break;
+          case 'library_search':
+            am.statusText = '正在检索知识库并核对片段…'; scheduleChatRender(); break;
+          case 'library_sources':
+            am.sources = ev.sources; scheduleChatRender(); scrollBottom(); break;
           case 'round':
             am.statusText = '第 ' + ev.round + ' 轮推理…'; scheduleChatRender(); break;
           case 'reasoning':
@@ -332,10 +339,17 @@ global.Scale = {
     /* ---------- 质量工具 ---------- */
     qtOpen: () => { global.QWizard.menu(); document.getElementById('qtOverlay').classList.add('show'); },
     qtClose: () => document.getElementById('qtOverlay').classList.remove('show'),
-    qtPick: (a) => {
+    qtPick: async (a) => {
       document.getElementById('qtOverlay').classList.remove('show');
-      if (a.w) global.QWizard.open(a.w);
-      else Actions.aiQuick({ q: a.ai || ('请用「' + a.name + '」方法帮我分析当前的质量问题。') });
+      if (a.skill) return global.OperationsUI.openSkill(a.skill);
+      if (a.w) return global.QWizard.open(a.w);
+      if (State.page !== 'aiwb') await go('aiwb');
+      const input = document.getElementById('chatInput');
+      if (input) {
+        input.value = [input.value.trim(), a.ai].filter(Boolean).join('\n\n');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      }
     },
     wzRun: (a) => global.QWizard.run(a.key),
     wzAi: (a) => {
@@ -365,12 +379,30 @@ global.Scale = {
       const r = await API.get('/qip-real-v3/api/chats/' + a.id);
       if (!r.row) return toast('会话不存在', 'err');
       Chat.sessionId = a.id;
-      Chat.messages = (r.row.messages || []).map((m) => ({ role: m.role, content: m.content, trace: m.trace || [], pending: [], thinkingDone: true }));
+      Chat.messages = (r.row.messages || []).map((m) => ({ role: m.role, content: m.content, trace: m.trace || [], sources: m.sources || [], pending: [], thinkingDone: true }));
       closeModal(); renderChat(); updateChatMeta(); toast('已载入历史会话', 'ok');
     },
-    quickAsk: async (a) => { await go('aiwb'); send(a.q); },
-    aiQuick: async (a) => { await go('aiwb'); send(a.q); },
-    chatFollowup: (a) => send(a.q),
+    quickAsk: async (a) => { await go('aiwb'); send(a.q, 'tools'); },
+    aiQuick: async (a) => { await go('aiwb'); send(a.q, 'tools'); },
+    chatFollowup: (a) => send(a.q, 'tools'),
+    libraryChat: async () => { Chat.libraryMode = true; await go('aiwb'); document.getElementById('chatInput')?.focus(); },
+    librarySource: (args) => QipLibrary.showSource(args),
+    libraryDelete: (args) => QipLibrary.remove(args),
+    libraryRetry: (args) => QipLibrary.retry(args),
+    libraryNaming: async () => {
+      const page = document.querySelector('.survey-enterprise');
+      const { defaults } = await API.get('/qip-real-v3/api/naming');
+      if (!page?.isConnected) return;
+      await QipLibrary.openSuggestions('naming', {
+        defaults,
+        isCurrent: () => page.isConnected,
+        read: initDraftFromForm,
+        apply: (values) => {
+          SetState.initDraft = { ...initDraftFromForm(), ...values };
+          go('init');
+        },
+      });
+    },
     toggleThink: (a) => { const el = document.getElementById('think-' + a.i); if (el) el.classList.toggle('collapsed'); },
     showToolResult: (a) => {
       const m = Chat.messages[a.i]; const t = m && m.trace && m.trace[a.ti];

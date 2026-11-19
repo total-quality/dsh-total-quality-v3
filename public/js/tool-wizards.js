@@ -9,8 +9,9 @@
   /* ---------------- 三列菜单定义 ---------------- */
   const QTools = {
     col1: [
-      { name: '8D工作法', ai: '请以 8D 工作法为框架，结合平台真实数据，帮我推进当前最紧急的一个质量改进项目：逐阶段给出该做什么、交付物、以及平台能自动完成的部分。' },
-      { name: 'FMEA分析', w: 'fmea' },
+      { name: '8D工作法', skill: '8d' },
+      { name: 'FMEA分析（PFMEA / DFMEA）', skill: 'fmea' },
+      { name: 'FMEA 单项评分', w: 'fmea' },
       { name: '标准条款精准检索', w: 'std' },
       { name: '海龟图生成', ai: '生成一个「过程海龟图」分析框架（输入/输出/方法/人员/设备/环境/绩效指标），并结合平台数据填充一个真实工序。' },
       { name: '质量成本计算', w: 'qualitycost' },
@@ -470,7 +471,7 @@
     const el = document.getElementById('qtGrid');
     if (!el) return;
     const items = menuItems();
-    el.innerHTML = items.map((t) => `<div class="qt-item" data-act="qtPick" data-args='${esc(JSON.stringify(t))}' title="${esc(t.name)}"><span class="qt-nm">${esc(t.name)}</span>${t.w ? '<span class="qt-sum">∑</span>' : ''}</div>`).join('')
+    el.innerHTML = items.map((t) => `<button type="button" class="qt-item" data-act="qtPick" data-args='${esc(JSON.stringify(t))}' title="${esc(t.name)}"><span class="qt-nm">${esc(t.name)}</span><span class="qt-sum">${t.skill ? '报告' : t.w ? '∑' : '问答'}</span></button>`).join('')
       + (items.length ? '' : '<div class="empty">当前版式无可用工具</div>');
   }
 

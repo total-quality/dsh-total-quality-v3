@@ -64,6 +64,8 @@
           </div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-foot">
+            <div class="library-scope"><label class="library-mode"><input id="chatLibraryMode" type="checkbox" ${Chat.libraryMode ? 'checked' : ''}>查知识库</label>
+              ${act('管理知识库文件', 'goto', { page: 'library' }, 'btn btn-sm')}</div>
             <textarea class="chat-input" id="chatInput" rows="2" placeholder="输入指令，可直接 @插件 定向查询（如「@SPC 检查 CT-0378 判异并给出根因假设」）…&#10;Enter 发送，Shift+Enter 换行"></textarea>
             <div class="chat-actions">
               <span class="quick-cmd" data-act="quickAsk" data-args='${esc(JSON.stringify({ q: '分析上周产品C 充电口盖间隙超差问题，给出根因假设排序和处置建议' }))}'>分析充电口盖间隙超差根因</span>
@@ -125,6 +127,7 @@
           </div></div>`).join('') + '</div>';
     }
     if (m.content) inner += `<div class="md-body">${md(m.content)}</div>`;
+    if (m.sources?.length) inner += `<div class="library-citations"><strong>原文出处</strong>${m.sources.map((ref) => QipLibrary.sourceButton(ref)).join('')}</div>`;
     if (m.pending && m.pending.length) {
       inner += m.pending.map((p) => `<div class="confirm-card">
         <div class="cc-t">⚠️ 待人工确认：${esc(p.label)}　<span style="font-weight:400;color:#8791a5;font-size:11px;">${esc(p.plugin)} / ${esc(p.id)}</span></div>

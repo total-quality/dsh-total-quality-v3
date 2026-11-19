@@ -228,7 +228,7 @@ function findEOCD(buf) {
  * @param {Buffer} buf
  * @returns {Record<string, Buffer>} 键为 zip 内条目名（正斜杠分隔）
  */
-function zipRead(buf) {
+function zipRead(buf, limits = {}) {
   if (!Buffer.isBuffer(buf)) buf = toBuffer(buf);
   const eocd = findEOCD(buf);
   if (eocd < 0) throw new Error('zipRead：找不到 ZIP 结束标记（不是合法的 ZIP 数据）');
@@ -256,6 +256,8 @@ function zipRead(buf) {
   }
 
   const out = {};
+  if (limits.maxEntries && entryCount > limits.maxEntries) throw new Error("ZIP 条目过多");
+  let expanded = 0;
   let p = cdOffset;
   for (let i = 0; i < entryCount; i++) {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) break;
@@ -302,14 +304,18 @@ function zipRead(buf) {
     if (dataStart > buf.length) continue;
 
     const raw = buf.slice(dataStart, Math.min(dataEnd, buf.length));
+    const remaining = limits.maxExpanded ? limits.maxExpanded - expanded : Infinity;
+    if (remaining < rawSize || (method === 0 && raw.length > remaining)) throw new Error('ZIP 解压内容过大');
     let content;
     if (method === 0) {
       content = Buffer.from(raw); // stored
     } else if (method === 8) {
-      content = zlib.inflateRawSync(raw); // deflate
+      content = zlib.inflateRawSync(raw, limits.maxExpanded ? { maxOutputLength: Math.max(1, remaining) } : undefined); // deflate
     } else {
       throw new Error('zipRead：不支持的压缩方式 method=' + method + '（条目 ' + name + '）');
     }
+    expanded += content.length;
+    if (limits.maxExpanded && expanded > limits.maxExpanded) throw new Error('ZIP 解压内容过大');
     // 大小已知时按声明值裁剪（防御性）
     if (rawSize > 0 && content.length > rawSize) content = content.slice(0, rawSize);
 
@@ -1186,8 +1192,8 @@ function resolvePartPath(baseDir, target) {
  * @param {Buffer} buf
  * @returns {{sheets: Array<{name:string, rows:string[][]}>}}
  */
-function xlsxRead(buf) {
-  const files = zipRead(buf);
+function xlsxRead(buf, limits) {
+  const files = zipRead(buf, limits);
   // 大小写不敏感 + 去掉前导斜杠的查表
   const index = new Map();
   for (const k of Object.keys(files)) index.set(k.replace(/^\/+/, '').toLowerCase(), files[k]);

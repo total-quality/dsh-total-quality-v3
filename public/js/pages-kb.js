@@ -27,7 +27,8 @@
       <div class="ai-strip">
         <div class="ai-ico">📚</div>
         <div class="ai-txt"><b>经验传承：</b>师傅访谈转写 → AI 抽取「问题-原因-对策-效果」四元组入库 → 语义检索 → AI 起草时自动引用出处。当前知识库 <b>${rows.length}</b> 条（经验卡 ${types['经验卡'] || 0} · 历史案例 ${types['历史案例'] || 0} · 标准 ${types['标准'] || 0}）。</div>
-        ${act('＋ 新增经验卡', 'newKnowledge', {}, 'btn btn-ai')}
+        ${act('上传知识库文件', 'goto', { page: 'library' }, 'btn btn-primary')}
+        ${act('新增经验卡', 'newKnowledge', {}, 'btn')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">
         ${kpi({ ico: '📚', label: '知识条目总量', value: rows.length, delta: Object.entries(types).map(([k, v]) => k + ' ' + v).join(' · ') })}

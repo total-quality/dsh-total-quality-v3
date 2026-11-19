@@ -21,9 +21,24 @@
 
 ## 改进工作台
 
-支持管理问答、8D、5Why、FMEA、SPC / 过程能力、质量手册六种模式，选择工作单后自动带入问题、计划、执行记录、测量摘要和业务关联。手册模式沿用体系调研，生成后同步到体系文件。分析结果自动留档，支持下载和版本修订；FMEA 可填写团队 S/O/D 评分，RPN 仅辅助排序。
+支持管理问答、8D、5Why、FMEA、SPC / 过程能力、质量手册六种模式。手册模式沿用体系调研，生成后同步到体系文件。
+
+「质量工具 skill」中的 8D 和 PFMEA／DFMEA 会打开工作台表单。8D 可关联工作单，带入现有问题、阶段记录和同批同特性测量，按 D0–D8 编排。FMEA 按七步组织，支持多条失效链、S/O/D、RPN、参考 AP 和实施后复评。参考 AP 须由团队对照企业采用的评价表核定。
+
+这两项使用本地处理，可预览章节、下载 Word／Excel／Markdown，并在同一条分析记录上修订。工具菜单另外保留单项评分、统计计算和问答引导；问答引导填入输入框，由用户编辑并发送。
 
 模型通过现有 Harness LLM 桥接调用。模型未配置或返回不可用内容时，明确显示本地资料整理及错误提示；不把工具协议 JSON 当成回答，不虚构检测、执行或批准结果。SPC / Cpk 沿用既有统计引擎，测量点数不作为产品不良件数。
+
+## 用户知识库文件
+
+从「知识与团队 → 知识库文件」上传企业手册、产品目录和工序规范。文件库默认空白，原有演示经验卡在独立的经验传承页面。上传支持 TXT、Markdown、CSV、DOCX、XLSX。文件库总容量为 100 MB。若系统 PATH 有 Poppler 的 `pdftotext`，也可上传有文字层的 PDF。
+
+参考 [WeKnora 文档入库](https://github.com/Tencent/WeKnora/blob/main/website-docs/02-architecture/03-document-pipeline.md) 与 [检索流程](https://github.com/Tencent/WeKnora/blob/main/website-docs/02-architecture/04-rag-pipeline.md)，文件先持久化并进入队列，后台解析、重叠分块、建立父段与检索片段映射并原子写入索引。解析可重试，重启会接续未完成入库。助手改写问题，融合原句和改写句的 BM25 召回，模型重排后回读父段补足语境，同一父段去重后生成带引用的回答。
+
+- 在 AI 工作助手勾选「查知识库」，或从文件页点击「在助手里查」。引用可打开片段并下载原文件。
+- 在企业设置或体系调研点击「从知识库带入」。候选值带引用，只填所选字段，提交仍走原表单。公司名称由企业设置统一维护。
+- 默认使用本地 SQLite FTS5。可在启动 Harness 时设置 `QIP_KB_EMBED_MODEL` 为已在本机 Ollama 加载的嵌入模型名称，启用向量召回与 RRF 融合。向量服务不可用时关键词索引仍可用。回答和提取始终使用 Harness 的模型配置。
+- 原文件和索引保存在业务数据目录的 `knowledge-library-sme.db`。进入知识库文件页面可单独重建索引或移除文件。业务样例重建不会清掉用户上传文件。选择问答或提取时，相关片段会交给 Harness 所选模型。
 
 ## 体系调研
 
@@ -34,7 +49,7 @@
 在 DeepSeek Harness 的插件管理器中添加本仓库的 Release 包，或在已安装 DSH 与 pnpm 的终端执行：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.5/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.9/dsh-total-quality-v3.tgz
 ```
 
 安装到当前使用的 profile 后，按宿主提示加载，点击侧栏“全质开源质量平台2”。无需再启动占用同一端口的 DSH 进程。Desktop 用户应安装到其实际使用的 profile。
