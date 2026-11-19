@@ -1,5 +1,7 @@
 # 全质开源质量平台
 
+<p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+
 面向中小制造企业的开源质量管理平台。以 DeepSeek Harness 插件形式运行，侧栏入口「全质开源质量平台2」，页面 `/qip-real-v3/`，MIT 许可证。
 
 [下载安装包](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) · [安装说明](安装说明.md)
