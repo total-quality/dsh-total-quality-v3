@@ -10,22 +10,11 @@ const DAY = 86400000;
 function dataNow() {
   const ms = store.col('measurements').all();
   if (!ms.length) return new Date();
-  let max = 0;
+  let max = -Infinity;
   for (const m of ms) { const t = Date.parse(m.ts); if (t > max) max = t; }
-  return new Date(max);
+  return Number.isFinite(max) ? new Date(max) : new Date();
 }
 function sinceISO(days) { return new Date(dataNow().getTime() - days * DAY).toISOString(); }
-
-/** 单件损失单价：按「当前命名」的车间顺序取基准值，用户改名后仍能对上（不依赖写死的车间名） */
-const UNIT_LOSS_BY_INDEX = [320, 480, 260, 180, 2600];
-function unitLossOf(workshop) {
-  if (UNIT_LOSS[workshop] !== undefined) return UNIT_LOSS[workshop];
-  const s = store.db.settings || {};
-  const names = ((s.naming || {}).workshops) || [];
-  const i = names.indexOf(workshop);
-  if (i >= 0 && UNIT_LOSS_BY_INDEX[i] !== undefined) return UNIT_LOSS_BY_INDEX[i];
-  return 200;
-}
 
 /** 明细：某特性全部单值（按时间排序），用于 SPC 计算 */
 function seriesOf(charId, days) {
@@ -53,7 +42,7 @@ function fmt(n, d = 3) { return n === null || n === undefined || Number.isNaN(n)
 /* ================================================================== */
 define({
   plugin: '@MES', name: 'mes_query_measurements', label: '查询在线测量数据',
-  description: '从 MES 查询指定关键特性/工位/产品在时间窗内的在线测量明细与统计量（均值、标准差、超差数、超差率、最大值、最小值）。当需要"用数据说话"时必须先调用本工具，禁止凭印象给数字。',
+  description: '查询平台已保存的关键特性/工位/产品测量明细和统计量（均值、标准差、超差数、超差率、最大值、最小值）。',
   parameters: {
     type: 'object',
     properties: {
@@ -82,8 +71,8 @@ define({
     const oos = rows.filter((r) => r.value > ch.usl || r.value < ch.lsl);
     const desc = stats.describe(values);
     const out = {
-      ok: true, 数据来源: '@MES 在线测量（夜间批同步 + 实时订阅）',
-      特性: { 编号: ch.id, 名称: ch.name, 产品: ch.model, 工位: ch.station, 标准: ch.nominal + '±' + fmt((ch.usl - ch.lsl) / 2) + ch.unit, USL: ch.usl, LSL: ch.lsl, 单位: ch.unit, 是否CTQ: ch.ctq },
+      ok: true, 数据来源: '本地测量台账',
+      特性: { 编号: ch.id, 名称: ch.name, 产品: ch.model, 工位: ch.station, 标准: ch.lsl + '–' + ch.usl + (ch.unit || ''), USL: ch.usl, LSL: ch.lsl, 单位: ch.unit, 是否CTQ: ch.ctq },
       时间窗: { 起: rows[0].ts.slice(0, 19), 止: rows[rows.length - 1].ts.slice(0, 19), 天数: days },
       样本量: values.length,
       统计量: { 均值: Number(desc.mean.toFixed(4)), 标准差: Number(desc.sd.toFixed(4)), 最小值: desc.min, 最大值: desc.max, 中位数: desc.median, 极差: Number((desc.max - desc.min).toFixed(4)), 变异系数: Number(desc.cv.toFixed(2)) },
@@ -108,8 +97,8 @@ define({
 });
 
 define({
-  plugin: '@MES', name: 'mes_scrap_summary', label: '报废/停线损失汇总',
-  description: '按车间/产品汇总报废与返修损失，含超差事件数、折算报废金额、停线工时。数据口径：以在线测量超差事件为线索，按企业标准损失单价折算（单价可在系统设置中调整）。',
+  plugin: '@MES', name: 'mes_scrap_summary', label: '测量超规格汇总',
+  description: '按车间/产品统计测量超规格点。测量点不能推断报废件数、成本或停线工时。',
   parameters: {
     type: 'object',
     properties: {
@@ -123,33 +112,27 @@ define({
     const since = sinceISO(days);
     const chars = store.col('spcChars').all();
     const rowsByWs = {};
-    let totalEvents = 0, totalAmount = 0;
+    let totalEvents = 0;
     for (const ch of chars) {
       if (args.workshop && ch.workshop !== args.workshop) continue;
       if (args.model && ch.model !== args.model) continue;
       const rows = seriesOf(ch.id, days).filter((r) => r.value > ch.usl || r.value < ch.lsl);
       if (!rows.length) continue;
-      const unitLoss = unitLossOf(ch.workshop) || 200;
-      const amount = rows.length * unitLoss;
       totalEvents += rows.length;
-      totalAmount += amount;
       const key = ch.workshop;
-      if (!rowsByWs[key]) rowsByWs[key] = { 车间: key, 超差事件数: 0, 折算金额: 0, 特性: [] };
+      if (!rowsByWs[key]) rowsByWs[key] = { 车间: key, 超差事件数: 0, 特性: [] };
       rowsByWs[key].超差事件数 += rows.length;
-      rowsByWs[key].折算金额 += amount;
-      rowsByWs[key].特性.push({ 特性: ch.id + ' ' + ch.name, 事件数: rows.length, 金额: amount });
+      rowsByWs[key].特性.push({ 特性: ch.id + ' ' + ch.name, 事件数: rows.length });
     }
     return {
-      ok: true, 数据来源: '@MES 报废/停线记录 + 企业损失单价',
+      ok: true, 数据来源: '本地测量记录',
       时间窗: since.slice(0, 10) + ' ~ ' + dataNow().toISOString().slice(0, 10),
-      合计: { 超差事件数: totalEvents, 折算损失金额: Math.round(totalAmount), 币种: 'CNY' },
-      分车间: Object.values(rowsByWs).sort((a, b) => b.折算金额 - a.折算金额),
-      口径说明: '单件损失单价：' + JSON.stringify(UNIT_LOSS) + ' 元/件（按车间顺序对应，改名后自动跟随）；口径与质量损失 QLF 一致（仅计直接损失）。',
+      合计: { 超差事件数: totalEvents },
+      分车间: Object.values(rowsByWs).sort((a, b) => b.超差事件数 - a.超差事件数),
+      口径说明: '超规格点是测量记录，报废件数、实际损失及停线时间需查企业原始记录。',
     };
   },
 });
-
-const UNIT_LOSS = { 一车间: 320, 二车间: 480, 三车间: 260, 四车间: 180, '五车间': 2600 };
 
 define({
   plugin: '@MES', name: 'mes_trace_by_vin', label: '整车追溯',
@@ -181,7 +164,7 @@ define({
     const days = args.days || 15;
     let rows = store.col('measurements').find((m) => m.ts >= sinceISO(days));
     if (args.charId) rows = rows.filter((r) => r.charId === args.charId);
-    if (args.station) rows = rows.filter((r) => r.station.indexOf(args.station) >= 0);
+    if (args.station) rows = rows.filter((r) => String(r.station || '').indexOf(args.station) >= 0);
     if (!rows.length) return { ok: false, error: '该条件下无批次记录' };
     const map = new Map();
     for (const r of rows) {
@@ -379,103 +362,47 @@ define({
 /* ================================================================== */
 /* @ERP                                                               */
 /* ================================================================== */
-const MATERIALS = [
-  { code: 'M-78120-01', name: '充电口盖总成', supplier: '宁波华翔', price: 86.5, unit: '元/件', leadTime: 3, lsl: 3.0, usl: 4.0, batch: 'B2510-12' },
-  { code: 'M-64311-02', name: '前门内饰板', supplier: '延锋内饰', price: 142.0, unit: '元/件', leadTime: 5, batch: 'B2511-04' },
-  { code: 'M-51207-08', name: '侧围外板（左）', supplier: '凌云股份', price: 268.0, unit: '元/件', leadTime: 7, batch: 'B2509-21' },
-  { code: 'M-90755-03', name: '动力电池模组 76.5kWh', supplier: '宁德时代', price: 18600.0, unit: '元/件', leadTime: 14, batch: 'B2510-02' },
-  { code: 'M-33210-05', name: '驱动电机总成', supplier: '博世汽车', price: 9840.0, unit: '元/件', leadTime: 21, batch: 'B2508-17' },
-  { code: 'M-45112-11', name: '面漆涂料（珍珠白）', supplier: '巴斯夫', price: 62.0, unit: '元/kg', leadTime: 10, batch: 'B2511-09' },
-  { code: 'M-22087-04', name: '悬置螺栓 M12×60', supplier: '晋亿实业', price: 4.2, unit: '元/件', leadTime: 2, batch: 'B2511-15' },
-  { code: 'M-66030-06', name: '仪表台总成', supplier: '拓普集团', price: 1240.0, unit: '元/件', leadTime: 6, batch: 'B2510-08' },
-];
-
 define({
   plugin: '@ERP', name: 'erp_batch_trace', label: '批次与供应商追溯',
-  description: '按物料或特性查询 ERP 中的批次-供应商-价格信息，并给出该物料在各供应商间的批次分布。用于判断「换批/换供应商」是否与失控时间点吻合。',
-  parameters: {
-    type: 'object',
-    properties: {
-      material: { type: 'string', description: '物料名称或编码关键词，如「充电口盖」' },
-      charId: { type: 'string', description: '或直接按特性编号关联物料' },
-      days: { type: 'number', description: '时间窗，默认 15' },
-    },
-  },
+  description: '从已录入或导入的测量记录中按特性、批次或供应商查询追溯线索。',
+  parameters: { type:'object', properties:{ charId:{type:'string'}, batch:{type:'string'}, supplier:{type:'string'}, material:{type:'string'}, days:{type:'number'} } },
   run(args) {
-    let mats = MATERIALS;
-    if (args.material) mats = mats.filter((m) => m.name.indexOf(args.material) >= 0 || m.code.indexOf(args.material) >= 0);
-    if (args.charId) {
-      const map = { 'CT-0378': '充电口盖', 'CT-0211': '面漆', 'CT-0155': '悬置螺栓', 'CT-0402': '侧围外板', 'CT-0301': '电池模组', 'CT-0088': '侧围外板', 'CT-0455': '前门内饰板' };
-      const kw = map[args.charId] || '';
-      mats = MATERIALS.filter((m) => m.name.indexOf(kw) >= 0 || m.code.indexOf(kw) >= 0);
+    const since = sinceISO(args.days || 30);
+    const rows = store.col('measurements').find((row) => row.ts >= since && row.batch
+      && (!args.charId || row.charId === args.charId) && (!args.batch || row.batch === args.batch)
+      && (!args.supplier || String(row.supplier || '').includes(args.supplier))
+      && (!args.material || String(row.charName || '').includes(args.material)));
+    const batches = new Map();
+    for (const row of rows) {
+      const key = JSON.stringify([row.batch, row.supplier || '']);
+      if (!batches.has(key)) batches.set(key,{ 批次:row.batch, 供应商:row.supplier || '未记录', 测量点:0, 特性:[] });
+      const entry = batches.get(key);
+      entry.测量点++;
+      if (!entry.特性.includes(row.charId)) entry.特性.push(row.charId);
     }
-    if (!mats.length) return { ok: false, error: '未找到匹配物料，试给出物料名称关键词' };
-    const out = mats.map((m) => {
-      const rows = store.col('measurements').find((r) => r.ts >= sinceISO(args.days || 15) && (r.charName.indexOf(m.name.slice(0, 3)) >= 0 || m.name.indexOf((r.charName || '').slice(0, 3)) >= 0));
-      const bySup = {};
-      const byBatch = {};
-      for (const r of rows) {
-        bySup[r.supplier] = bySup[r.supplier] || { 供应商: r.supplier, 数量: 0, 均值: [] };
-        bySup[r.supplier].数量++; bySup[r.supplier].均值.push(r.value);
-        byBatch[r.batch] = byBatch[r.batch] || { 批次: r.batch, 供应商: r.supplier, 起: r.ts, 止: r.ts, 数量: 0, 均值: [] };
-        const b = byBatch[r.batch];
-        b.数量++; b.均值.push(r.value);
-        if (r.ts < b.起) b.起 = r.ts; if (r.ts > b.止) b.止 = r.ts;
-      }
-      return {
-        物料: m.name, 编码: m.code, 主供应商: m.supplier, 单价: m.price + '/' + m.unit, 采购周期: m.leadTime + ' 天', 当前批次: m.batch,
-        关联测量批次: Object.values(byBatch).map((b) => ({ 批次: b.批次, 供应商: b.供应商, 起: b.起.slice(0, 16), 止: b.止.slice(0, 16), 数量: b.数量, 均值: Number((b.均值.reduce((a, c) => a + c, 0) / b.均值.length).toFixed(4)) })).sort((a, b) => (a.起 < b.起 ? -1 : 1)),
-        供应商分布: Object.values(bySup).map((s) => ({ 供应商: s.供应商, 数量: s.数量, 均值: Number((s.均值.reduce((a, c) => a + c, 0) / s.均值.length).toFixed(4)) })),
-      };
-    });
-    return { ok: true, 数据来源: '@ERP 批次与供应商主数据', 物料数: out.length, 明细: out };
+    return {ok:true, 数据来源:'本地测量与追溯记录', 明细:[...batches.values()], 提示:rows.length ? '' : '没有匹配的已导入记录'};
   },
 });
 
 define({
   plugin: '@ERP', name: 'erp_material_cost', label: '物料成本查询',
-  description: '查询物料单价、工时费率等成本基础数据，用于收益测算。收益测算必须用本工具返回的 ERP 标准价，不得自行估计。',
-  parameters: { type: 'object', properties: { material: { type: 'string', description: '物料名称关键词，留空返回全部' } } },
+  description: '查本地导入的物料成本台账。',
+  parameters: {type:'object',properties:{material:{type:'string'}}},
   run(args) {
-    let mats = MATERIALS;
-    if (args.material) mats = mats.filter((m) => m.name.indexOf(args.material) >= 0 || m.code.indexOf(args.material) >= 0);
-    return {
-      ok: true, 数据来源: '@ERP 物料主数据 / 成本中心',
-      工时费率: { 装配工时: 68, 返修工时: 92, 检验工时: 55, 单位: '元/小时' },
-      停线损失: { 单线每小时: 8600, 单位: '元/小时' },
-      物料: mats.map((m) => ({ 物料: m.name, 编码: m.code, 单价: m.price, 单位: m.unit, 供应商: m.supplier })),
-    };
+    const rows=store.col('materials').find((row)=>!args.material || row.code.includes(args.material) || row.name.includes(args.material));
+    return {ok:true, 数据来源:'导入的物料成本台账', 物料:rows.map((row)=>({物料:row.name,编码:row.code,单价:row.price,单位:row.unit,供应商:row.supplier})),
+      提示:rows.length ? '' : '请在系统设置导入物料成本台账'};
   },
 });
 
 define({
   plugin: '@ERP', name: 'erp_bom', label: 'BOM 查询',
-  description: '查询指定产品/总成的 BOM 结构，用于分析失效件与其装配层级关系。',
-  parameters: { type: 'object', properties: { model: { type: 'string', description: '产品' }, part: { type: 'string', description: '零件名称关键词' } } },
+  description: '按产品或零件查已导入的 BOM。',
+  parameters: {type:'object',properties:{model:{type:'string'},part:{type:'string'}}},
   run(args) {
-    const BOM = {
-      '产品C': [
-        { 层级: 1, 零件: '充电口盖总成', 编码: 'M-78120-01', 数量: 1, 供应商: '宁波华翔', 关键: true },
-        { 层级: 2, 零件: '充电口盖本体', 编码: 'M-78120-01-1', 数量: 1, 供应商: '宁波华翔' },
-        { 层级: 2, 零件: '铰链组件', 编码: 'M-78120-01-2', 数量: 1, 供应商: '宁波华翔' },
-        { 层级: 2, 零件: '锁扣弹簧', 编码: 'M-78120-01-3', 数量: 1, 供应商: '均胜电子' },
-        { 层级: 1, 零件: '侧围外板（左）', 编码: 'M-51207-08', 数量: 1, 供应商: '凌云股份', 关键: true },
-        { 层级: 1, 零件: '动力电池模组 76.5kWh', 编码: 'M-90755-03', 数量: 1, 供应商: '宁德时代', 关键: true },
-      ],
-      '产品A': [
-        { 层级: 1, 零件: '侧围外板（左）', 编码: 'M-51207-08', 数量: 1, 供应商: '凌云股份', 关键: true },
-        { 层级: 1, 零件: '前门内饰板', 编码: 'M-64311-02', 数量: 2, 供应商: '延锋内饰' },
-        { 层级: 1, 零件: '面漆涂料（珍珠白）', 编码: 'M-45112-11', 数量: 4.2, 供应商: '巴斯夫', 关键: true },
-      ],
-      '产品B': [
-        { 层级: 1, 零件: '驱动电机总成', 编码: 'M-33210-05', 数量: 1, 供应商: '博世汽车', 关键: true },
-        { 层级: 1, 零件: '仪表台总成', 编码: 'M-66030-06', 数量: 1, 供应商: '拓普集团' },
-        { 层级: 1, 零件: '悬置螺栓 M12×60', 编码: 'M-22087-04', 数量: 8, 供应商: '晋亿实业' },
-      ],
-    };
-    let rows = BOM[args.model] || Object.values(BOM).flat();
-    if (args.part) rows = rows.filter((r) => r.零件.indexOf(args.part) >= 0);
-    return { ok: true, 数据来源: '@ERP BOM 主数据', 产品: args.model || '全部', 条目数: rows.length, BOM: rows };
+    const rows=store.col('bom').find((row)=>(!args.model || row.model===args.model) && (!args.part || row.part.includes(args.part)));
+    return {ok:true, 数据来源:'导入的 BOM', 条目数:rows.length, BOM:rows.map((row)=>({产品:row.model,层级:row.level,零件:row.part,编码:row.code,数量:row.quantity,供应商:row.supplier})),
+      提示:rows.length ? '' : '没有匹配数据，可在系统设置导入 BOM'};
   },
 });
 
@@ -589,4 +516,4 @@ define({
 
 function rows2avg(rows) { return rows.length ? rows.reduce((a, c) => a + c.confidence, 0) / rows.length : 0; }
 
-module.exports = { dataNow, seriesOf, subgroupsOf, charInfo, sinceISO, MATERIALS, UNIT_LOSS };
+module.exports = { dataNow, seriesOf, subgroupsOf, charInfo, sinceISO };

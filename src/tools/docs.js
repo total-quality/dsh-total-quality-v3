@@ -52,15 +52,50 @@ define({
     required: ['type'],
   },
   run(args, ctx) {
-    const blocks = [];
-    const period = args.period || new Date().toISOString().slice(0, 7);
+    const types = ['质量周报','质量月报','专项分析报告','根因分析报告','8D报告','SPC分析报告'];
+    if (!types.includes(args.type)) return {ok:false,error:'请选择受支持的报告类型'};
+    const projectReport = ['8D报告','根因分析报告'].includes(args.type);
+    const project = projectReport ? store.col('projects').get(args.projectId) : null;
+    if (projectReport && !project) return {ok:false,error:'请提供报告关联的有效改进项目编号'};
+    const needsScope = args.type === 'SPC分析报告';
+    if (needsScope && !store.col('spcChars').get(args.scope)) return {ok:false,error:'请选择有效的测量特性'};
+    const org = store.getSetting('org', {});
     const now = localStamp(new Date());
-    const title = args.title || (args.scope ? args.scope + ' ' : '') + args.type + '（' + period + '）';
-    blocks.push({ type: 'title', text: title });
-    blocks.push({ type: 'subtitle', text: '某制造型企业 · 质量改进部门　|　编制日期：' + now + '　|　编制人：' + (args.author || 'AI 质量改进智能体（人工复核后发布）') });
-    blocks.push({ type: 'hr' });
+    const end = new Date();
+    const lookback = args.type === '质量周报' ? 7 : 30;
+    const month = typeof args.period === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(args.period) ? args.period : '';
+    const range = args.type === '质量月报' && month
+      ? { from:new Date(month+'-01T00:00:00+08:00'), to:new Date(Date.UTC(Number(month.slice(0,4)), Number(month.slice(5)), 1, -8)) }
+      : {from:new Date(end.getTime() - lookback*86400000),to:end};
+    const period = localStamp(range.from) + ' 至 ' + localStamp(range.to);
+    const title = args.title || (project ? project.title + ' ' : args.scope ? args.scope + ' ' : '') + args.type + '（' + period + '）';
+    const blocks = [{type:'title',text:title}, {type:'subtitle',text:[org.company,org.dept,'编制日期 ' + now,'编制人 ' + (args.author || '平台汇总 · 待复核')].filter(Boolean).join(' · ')}, {type:'hr'}];
 
-    const ov = dashboardSnapshot(args.scope);
+    if (project) {
+      const c = project.operationsId && store.col('operationCases').get(project.operationsId);
+      const issue = project.issueId && store.col('issues').get(project.issueId);
+      blocks.push({type:'h1',text:'项目与问题'}, {type:'kv',items:[
+        ['项目编号',project.id],['关联问题',project.issueId || '待补充'],['问题描述',c?.description || issue?.description || project.description || '待补充'],
+        ['责任人',project.owner || '待补充'],['当前阶段',project.stage || '待补充'],
+      ]});
+      const steps = args.type === '8D报告' ? ['contain','cause','correct','verify'] : ['cause','verify'];
+      const labels = {contain:'D3 围堵',cause:'D4 根因',correct:'D5–D6 纠正',verify:'效果验证'};
+      for (const step of steps) {
+        const accepted = (c?.submissions || []).filter((s) => s.taskKey===step && s.acceptedBy);
+        blocks.push({type:'h1',text:labels[step]});
+        if (accepted.length) blocks.push({type:'table',header:['执行结果','证据','复核人'],rows:accepted.map((s)=>[s.result,s.evidence,s.acceptedBy])});
+        else {
+          const key = {contain:'d3',cause:'d4',correct:'d5',verify:'d6'}[step];
+          const saved = project[key];
+          const value = typeof saved === 'string' ? saved : saved?.content;
+          blocks.push({type:'p',text:value ? '项目台账记录，待查验：' + value : '待补充经复核的记录。'});
+        }
+      }
+      if (args.type === '8D报告') blocks.push({type:'h1',text:'D7 防再发与 D8 结案'}, {type:'p',text:c?.closedAt ? '工作单已确认结案：' + c.closedAt + ' / ' + c.closedBy : '待核对防再发和结案依据。'});
+      return writeReport(args,ctx,blocks,title,period);
+    }
+    const ov = dashboardSnapshot(args.scope, range);
+    if (needsScope && !ov.measurements) return {ok:false,error:'所选特性在统计期内没有测量记录'};
     blocks.push({ type: 'h1', text: '一、总体情况' });
     blocks.push({ type: 'p', text: '本期（' + period + '）平台共归集质量数据 ' + ov.measurements + ' 个在线测量点，命中 SPC 判异 ' + ov.violations + ' 条，超差点 ' + ov.oos + ' 个；质量问题 ' + ov.issueTotal + ' 起（未关闭 ' + ov.issueOpen + ' 起，其中 A 级 ' + ov.issueA + ' 起）；在改改进项目 ' + ov.projOpen + ' 个，按期率 ' + ov.onTimeRate + '，超期 ' + ov.projOverdue + ' 个。' });
     blocks.push({ type: 'kv', items: [
@@ -100,10 +135,10 @@ define({
 
     // 收益
     blocks.push({ type: 'h1', text: '四、改进收益' });
-    const ledger = store.col('benefits').all();
+    const ledger = store.col('benefits').all().filter((row)=>{const at=Date.parse(row.verifiedAt || row.createdAt);return at>=+range.from && at<+range.to;});
     const vt = ledger.filter((b) => b.status === 'verified').reduce((a, c) => a + c.amount, 0);
     const pd = ledger.filter((b) => b.status === 'pending').reduce((a, c) => a + c.amount, 0);
-    blocks.push({ type: 'p', text: '已财务核定收益 ' + vt.toFixed(1) + ' 万元，待核定 ' + pd.toFixed(1) + ' 万元。收益口径：仅计直接损失（报废料、返工工时、停线损失、索赔），单价采用 ERP 当期标准价，摊销期不超过 12 个月。' });
+    blocks.push({ type: 'p', text: '已财务核定收益 ' + vt.toFixed(1) + ' 万元，待核定 ' + pd.toFixed(1) + ' 万元。收益口径：仅计直接损失（报废料、返工工时、停线损失、索赔），单价按核定依据，摊销期不超过 12 个月。' });
     if (ledger.length) {
       blocks.push({ type: 'table', header: ['单号', '项目', '类型', '金额（万元）', '期间', '状态'],
         rows: ledger.slice(0, 15).map((b) => [b.id, b.projectId || '—', b.type, String(b.amount), b.period, b.status === 'verified' ? '财务已核定' : '待核定']) });
@@ -127,38 +162,36 @@ define({
     conclusion.push('⑤持续把关闭项目的经验按「问题-原因-对策-效果」四元组沉淀入知识库，形成防再发闭环。');
     conclusion.forEach((c) => blocks.push({ type: 'numbered', text: c }));
     blocks.push({ type: 'hr' });
-    blocks.push({ type: 'subtitle', text: '本报告由「' + brandName() + '」自动生成；所有数据来自平台插件（@MES/@SPC/@AQI/@OA/@FIN）实时查询，结论均挂接数据出处。对外发布前需经人工确认。' });
+    blocks.push({ type: 'subtitle', text: '本报告由「' + brandName() + '」自动生成；数据来自本机已录入或导入的记录。对外发布前需经人工确认。' });
 
-    const buf = getOffice().docxWrite(blocks);
-    const dir = outDir(ctx);
-    const fname = safeName(title) + '_' + Date.now() + '.docx';
-    const fp = path.join(dir, fname);
-    fs.writeFileSync(fp, buf);
-    const rec = store.col('reports').insert({
-      type: args.type, title, period, scope: args.scope || '', author: args.author || '智能体',
-      format: 'docx', file: path.basename(fp), size: buf.length, sections: (args.sections || []).map((s) => s.heading),
-      downloadUrl: '/qip-real-v3/api/reports/download/' + encodeURIComponent(path.basename(fp)), status: 'draft',
-      createdAt: new Date().toISOString(),
-    });
-    store.audit({ plugin: '@DOC', action: '生成报告', params: { type: args.type, title }, resultSummary: rec.id + ' ' + path.basename(fp), purpose: '报表生成' });
-    return {
-      ok: true, 报告编号: rec.id, 报告标题: title, 格式: 'Word (.docx)', 文件大小: Math.round(buf.length / 1024) + ' KB',
-      下载链接: rec.downloadUrl, 已保存至: '报表中心',
-      章节: blocks.filter((b) => b.type === 'h1').map((b) => b.text),
-      内容摘要: '含总体情况 KPI、' + ov.charRows.length + ' 个特性的过程能力表、' + ov.topIssues.length + ' 起重点问题、' + ov.projects.length + ' 个改进项目、收益台账与结论建议。',
-      提醒: '报告为草稿状态，对外发布前需人工确认（报告中心 → 确认发布）。',
-    };
+    return writeReport(args, ctx, blocks, title, period);
   },
 });
 
+function writeReport(args, ctx, blocks, title, period) {
+  const buffer = getOffice().docxWrite(blocks);
+  const filename = safeName(title).slice(0,100) + '_' + require('node:crypto').randomUUID() + '.docx';
+  const file = path.join(outDir(ctx),filename);
+  fs.writeFileSync(file,buffer,{flag:'wx'});
+  try {
+    return store.transaction(() => {
+      const row = store.col('reports').insert({type:args.type,title,period,scope:args.projectId || args.scope || '',author:args.author || '平台汇总',
+        format:'docx',file:filename,size:buffer.length,downloadUrl:'/qip-real-v3/api/reports/download/' + encodeURIComponent(filename),status:'draft'});
+      return {ok:true,报告编号:row.id,报告标题:title,格式:'Word (.docx)',下载链接:row.downloadUrl,
+        章节:blocks.filter((item)=>item.type==='h1').map((item)=>item.text),提醒:'在报表中心下载核对后，再按企业流程发布。'};
+    });
+  } catch (error) { fs.unlinkSync(file); throw error; }
+}
+
 /** 汇总驾驶舱快照（供报告与晨报复用） */
-function dashboardSnapshot(scope) {
+function dashboardSnapshot(scope, range) {
+  const inRange = (timestamp) => !range || (Date.parse(timestamp)>=+range.from && Date.parse(timestamp)<+range.to);
   const chars = store.col('spcChars').all().filter((c) => !scope || (c.workshop + c.model + c.id + c.name).indexOf(scope) >= 0 || scope.indexOf(c.id) >= 0);
   const charRows = [];
   let measurements = 0, oos = 0, violations = 0;
   const violationRows = [];
   for (const ch of chars) {
-    const rows = seriesOf(ch.id, 30);
+    const rows = range ? store.col('measurements').find((m) => m.charId===ch.id && inRange(m.ts)).sort((a,b)=>a.ts.localeCompare(b.ts)) : seriesOf(ch.id, 30);
     const v = rows.map((r) => r.value);
     const o = rows.filter((r) => r.value > ch.usl || r.value < ch.lsl).length;
     measurements += v.length; oos += o;
@@ -171,10 +204,10 @@ function dashboardSnapshot(scope) {
     if (hits.length) violationRows.push({ char: ch.id + ' ' + ch.name, rules: hits.map((h) => '准则' + h.rule).join('/'), severity: hits.some((h) => h.severity === 'high') ? '高' : '中', count: hits.reduce((a, c) => a + c.indexes.length, 0), limits: ch.lsl + '~' + ch.usl + ch.unit });
     charRows.push({ id: ch.id, name: ch.name, workshop: ch.workshop, usl: ch.usl, lsl: ch.lsl, mean, cpk, oos: o, hits: hits.length, status: hits.length ? '失控' : cpk === '—' ? '数据不足' : Number(cpk) >= 1.33 ? '受控' : '需关注' });
   }
-  const issues = store.col('issues').all();
+  const issues = store.col('issues').all().filter((row)=>inRange(row.createdAt) && (!scope || [row.id,row.model,row.workshop,row.title].some((part)=>String(part || '').includes(scope))));
   const projects = store.col('projects').all().filter((p) => !scope || (p.workshop + p.model + p.id + p.title).indexOf(scope) >= 0);
   const open = projects.filter((p) => p.stage !== 'D8');
-  const ledger = store.col('benefits').all();
+  const ledger = store.col('benefits').all().filter((row)=>inRange(row.verifiedAt || row.createdAt));
   return {
     measurements, oos, violations, violationRows, charRows,
     ftt: measurements > 0 ? (((measurements - oos) / measurements) * 100).toFixed(2) + '%' : '暂无测量数据',
@@ -196,7 +229,7 @@ define({
   parameters: {
     type: 'object',
     properties: {
-      dataset: { type: 'string', enum: ['issues', 'projects', 'measurements', 'spc', 'knowledge', 'benefits', 'defects', 'all'], description: '数据集' },
+      dataset: { type: 'string', enum: ['issues', 'projects', 'measurements', 'spc', 'knowledge', 'benefits', 'defects', 'measurement_template', 'all'], description: '数据集' },
       format: { type: 'string', enum: ['xlsx', 'csv'], description: '默认 xlsx' },
       charId: { type: 'string', description: '导出测量数据时可指定特性' },
       days: { type: 'number', description: '时间窗天数' },
@@ -209,16 +242,18 @@ define({
     const sheets = [];
     const add = (name, rows) => { if (rows && rows.length) sheets.push({ name, rows }); };
 
+    if (ds === 'measurement_template') add('测量数据', [['特性编号','特性名称','测量值','规格下限','规格上限','批次','产品','车间','工位','时间','班次','单位','供应商','操作者','VIN','子组']]);
     if (ds === 'issues' || ds === 'all') add('质量问题库', [['编号', '产品', '车间', '工位', '问题描述', '来源', '等级', '状态', '责任人', '关联项目', '登记时间', '关闭时间']].concat(
       store.col('issues').all().map((i) => [i.id, i.model, i.workshop, i.station, i.title, i.source, i.severity, i.status, i.owner, i.projectId || '', (i.createdAt || '').slice(0, 10), i.closedAt ? i.closedAt.slice(0, 10) : ''])));
     if (ds === 'projects' || ds === 'all') add('改进项目', [['编号', '项目名称', '产品', '车间', '责任人', '等级', '当前阶段', '进度', '截止日期', '是否超期', '来源问题', '预估收益(万元)']].concat(
       store.col('projects').all().map((p) => [p.id, p.title, p.model, p.workshop, p.owner, p.severity, p.stage, p.progress + '%', (p.dueAt || '').slice(0, 10), p.overdue ? '超期' : '正常', p.issueId, p.benefitEstimate])));
     if (ds === 'measurements' || ds === 'all') {
-      const rows = [['特性编号', '特性名称', '产品', '车间', '工位', '时间', '班次', '测量值', '单位', '批次', '供应商', '操作者', 'VIN']];
+      const rows = [['特性编号', '特性名称', '产品', '车间', '工位', '时间', '班次', '测量值', '单位', '批次', '供应商', '操作者', 'VIN', '规格下限', '规格上限', '子组']];
+      const chars = new Map(store.col('spcChars').all().map((c) => [c.id,c]));
       let ms = store.col('measurements').all();
       if (args.charId) ms = ms.filter((m) => m.charId === args.charId);
       if (args.days) ms = ms.filter((m) => m.ts >= sinceISO(args.days));
-      ms.slice(0, 60000).forEach((m) => rows.push([m.charId, m.charName, m.model, m.workshop, m.station, m.ts.slice(0, 19), m.shift, m.value, m.unit, m.batch, m.supplier, m.operator, m.vin]));
+      ms.slice(0, 60000).forEach((m) => rows.push([m.charId, m.charName, m.model, m.workshop, m.station, m.ts, m.shift, m.value, m.unit, m.batch, m.supplier, m.operator, m.vin, chars.get(m.charId)?.lsl, chars.get(m.charId)?.usl, m.subgroup]));
       add('测量数据', rows);
     }
     if (ds === 'spc' || ds === 'all') {
@@ -230,9 +265,9 @@ define({
     if (ds === 'knowledge' || ds === 'all') add('知识库', [['编号', '类型', '类别', '标题', '问题', '原因', '对策', '效果', '标签', '出处', '作者', '浏览数']].concat(
       store.col('knowledge').all().map((k) => [k.id, k.type, k.category, k.title, k.problem, k.cause, k.action, k.effect, (k.tags || []).join('/'), k.source, k.author, k.views])));
     if (ds === 'benefits' || ds === 'all') add('收益台账', [['单号', '项目', '类型', '金额(万元)', '期间', '状态', '核定人', '口径']].concat(
-      store.col('benefits').all().map((b) => [b.id, b.projectId, b.type, b.amount, b.period, b.status === 'verified' ? '财务已核定' : '待核定', b.verifiedBy, b.formula])));
+      store.col('benefits').all().map((b) => [b.id, b.projectId, b.type, b.amount, b.period, b.status === 'verified' ? '已核定' : b.status === 'rejected' ? '已驳回' : '待核定', b.verifiedBy, b.formula])));
     if (ds === 'defects' || ds === 'all') add('AI质检缺陷', [['时间', '产品', '车间', '工位', '缺陷类型', '置信度', '等级', '批次', '图片']].concat(
-      store.col('defects').all().map((d) => [d.ts.slice(0, 19), d.model, d.workshop, d.station, d.type, d.confidence, d.severity, d.batch, d.imageRef])));
+      store.col('defects').all().map((d) => [(d.ts || d.createdAt || '').slice(0, 19), d.model, d.workshop, d.station, d.type, d.confidence, d.severity, d.batch, d.imageRef])));
 
     if (!sheets.length) return { ok: false, error: '该数据集没有数据可导出' };
     const dir = outDir(ctx);
@@ -266,8 +301,8 @@ define({
 
 /* ------------------------------------------------------------------ */
 define({
-  plugin: '@DOC', name: 'qrqc_voice_report', label: '现场语音报问题',
-  description: '把车间现场语音/文字描述（如「四车间三线右后门关门声发闷，连续第三台」）结构化为标准质量问题单：自动识别产品/车间/工位/缺陷类别/等级，回填 MES 工位批次，并匹配相似历史案例。',
+  plugin: '@DOC', name: 'qrqc_voice_report', label: '根据现场描述登记问题',
+  description: '将现场文字描述按关键词提取产品、车间、工位和初始风险等级并登记，返回相似案例供核对。',
   parameters: {
     type: 'object',
     properties: {
@@ -278,7 +313,8 @@ define({
   },
   write: true,
   run(args) {
-    const t = args.text || '';
+    const t = String(args.text || '').trim();
+    if (!t || t.length > 12000) return {ok:false,error:'请填写有效的现场描述'};
     const wsNames = (((store.db.settings || {}).naming || {}).workshops) || ['一车间', '二车间', '三车间', '四车间', '五车间'];
     const workshop = wsNames.find((w) => t.indexOf(w) >= 0 || t.indexOf(w.replace(' ', '')) >= 0) || '';
     const pdNames = (((store.db.settings || {}).naming || {}).products) || ['产品A', '产品B', '产品C'];
@@ -289,9 +325,9 @@ define({
     const station = stationMatch ? stationMatch[0] : (workshop ? workshop + '（工位待补）' : '');
     const severity = /(安全|起火|断裂|失效|批量|出口|法规)/.test(t) ? 'A' : /(连续|第[三四五六七八九十]台|多台|批量)/.test(t) ? 'B' : 'C';
     const rec = store.col('issues').insert({
-      title: t.slice(0, 40), description: '【现场语音报障】' + t, model, workshop, station,
+      title: t.slice(0, 40), description: '【现场描述报障】' + t, model, workshop, station,
       source: '现场', severity, owner: '待指派', status: '整改中', projectId: null, tags: [],
-      quantity: 0, history: [{ ts: new Date().toISOString(), user: args.reporter || '现场报障', action: '语音报障登记', note: 'AI 结构化提取' }],
+      quantity: 0, history: [{ ts: new Date().toISOString(), user: args.reporter || '现场报障', action: '现场描述登记', note: '规则提取行文，待人工核对' }],
     });
     const retrieval = require('../lib/retrieval');
     const { getKbIndex } = require('./business');
@@ -299,7 +335,7 @@ define({
     return {
       ok: true, 问题编号: rec.id,
       结构化结果: { 产品: model || '待确认', 车间: workshop || '待确认', 工位: station, 问题: t, 等级: severity, 定级依据: severity === 'A' ? '涉及安全/法规或已流出' : severity === 'B' ? '批量或重复发生' : '个案' },
-      回填建议: { 批次: '可由 @MES 按工位+时间窗自动回填', 班次: '按报障时间自动关联' },
+      待核对: ['实际批次与班次', '风险等级和潜在流出范围'],
       相似历史案例: kb,
       下一步: '已写入问题库；如为重复发生，建议调用 project_create 立项',
     };

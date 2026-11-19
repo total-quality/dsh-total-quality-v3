@@ -46,7 +46,7 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     return { summary: c.kind === 'application' ? '核对变更依据、适用要求及实施后的验证安排。' : '核对批次影响范围，先围堵，再验证原因、纠正与效果。', owner: c.owner, due: new Date(Date.parse(clock()) + (c.risk === 'A' ? 24 : 48) * 3600000).toISOString(), action: c.kind === 'application' ? '确认变更范围、风险评估与实施条件，记录调整前后同口径的验证数据。' : incoming ? '核对供应商与来料批次，隔离库存及已投产物料，登记数量、流向与复检结果并反馈供应商。' : '核对批次库存、在制品及已交付范围，隔离受影响产品并复检，登记实际数量、去向及检验记录。', hypothesis: '尚未验证根因；核对人、机、料、法、环、测的变化点，分别验证发生原因与流出原因。', verification: '核对批次清单、实际处置数量、原始检验记录和连续批次验证结果。', source: '本地规则草稿', generatedAt: clock() };
   }
   function addCase(input, issue) {
-    let c = { id: issue.id, issueId: issue.id, number: issue.id, projectId: input.projectId || issue.projectId || '', kind: input.kind || 'issue', title: input.title || issue.title, description: input.description || issue.description || issue.title, product: input.product || issue.model || '', batch: input.batch || issue.batch || '', location: input.location || issue.workshop || '', owner: owner(input.owner || issue.owner), risk: input.risk || issue.severity || 'B', source: input.source || issue.source || '问题库', status: 'plan_review', stage: 0, tasks: [], submissions: [], history: [], files: [], version: 0, createdAt: clock(), updatedAt: clock(), missing: [], refs: input.refs || [] };
+    let c = { id: issue.id, issueId: issue.id, number: issue.id, projectId: input.projectId || issue.projectId || '', kind: input.kind || (issue.source === '市场' ? 'complaint' : 'issue'), title: input.title || issue.title, description: input.description || issue.description || issue.title, product: input.product || issue.model || '', batch: input.batch || issue.batch || '', location: input.location || issue.workshop || '', owner: owner(input.owner || issue.owner), risk: input.risk || issue.severity || 'B', source: input.source || issue.source || '问题库', status: 'plan_review', stage: 0, tasks: [], submissions: [], history: [], files: [], version: 0, createdAt: clock(), updatedAt: clock(), missing: [], refs: input.refs || [] };
     c.business = Business.normalizeBusiness(input.business || {}, c); c.plan = plan(c); c.ai = { status: 'queued' };
     if (c.kind === 'application' && (!input.basis || !input.validation)) { c.status = 'needs_info'; c.missing = ['变更依据与适用要求', '变更前后验证安排']; }
     issue.operationsId = c.id; c = store.col('operationCases').insert(c); event(c, '已归类，自动整理处理方案与核对清单'); sync(c); return c;
@@ -175,8 +175,23 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     requireObject(input); const filename = text(input.filename, '文件名', 1, 160); let data = input.rows;
     if (data === undefined) { if (typeof input.base64 !== 'string' || input.base64.length > 7500000) fail('文件须小于 5 MB'); const bytes = Buffer.from(input.base64, 'base64'); if (bytes.length > 5 * 1024 * 1024) fail('文件须小于 5 MB'); if (/\.json$/i.test(filename)) { try { const j = JSON.parse(bytes.toString('utf8')); data = Array.isArray(j) ? j : j.measurements; } catch (_) { fail('JSON 格式无效'); } } else { const sheets = /\.csv$/i.test(filename) ? [{ rows: parseCsv(bytes.toString('utf8')) }] : /\.xlsx$/i.test(filename) ? office.xlsxRead(bytes).sheets : null; if (!sheets) fail('请上传 CSV、JSON 或 XLSX'); const matrix = sheets[0]?.rows; if (!matrix?.length) fail('文件没有数据'); const header = matrix[0].map((v) => String(v ?? '').replace(/^\uFEFF/, '').trim()); if (new Set(header).size !== header.length || header.some((v) => !v)) fail('表头不可为空或重复'); data = matrix.slice(1).filter((r) => r.some((v) => v != null && String(v).trim())).map((r, i) => { if (r.length !== header.length) fail('第 ' + (i + 2) + ' 行列数与表头不一致'); return Object.fromEntries(header.map((h, n) => [h, r[n]])); }); } }
     if (!Array.isArray(data) || !data.length || data.length > 5000) fail('一次接收 1～5000 条测量记录');
-    const aliases = { charId: ['charId', '特性编号'], name: ['name', 'charName', '特性名称', '特性'], value: ['value', '测量值', '实测值'], lsl: ['lsl', '下限', '规格下限'], usl: ['usl', '上限', '规格上限'], batch: ['batch', '批次', '批号'], location: ['location', 'workshop', '车间', '工序'], product: ['product', 'model', '产品'], owner: ['owner', '责任人'], unit: ['unit', '单位'], ts: ['ts', '时间', '测量时间'] };
-    const rows = data.map((row, i) => { requireObject(row); const r = {}; for (const [key, names] of Object.entries(aliases)) r[key] = names.map((n) => row[n]).find((v) => v != null && String(v).trim() !== ''); const ch = r.charId && store.col('spcChars').get(String(r.charId)); r.name = text(String(r.name || ch?.name || ''), '第 ' + (i + 1) + ' 行特性名称', 1, 100); r.value = numeric(r.value, '第 ' + (i + 1) + ' 行测量值'); r.lsl = numeric(r.lsl ?? ch?.lsl, '规格下限'); r.usl = numeric(r.usl ?? ch?.usl, '规格上限'); if (r.lsl >= r.usl) fail('规格下限须小于上限'); if (ch && (r.lsl !== ch.lsl || r.usl !== ch.usl)) fail('已有特性的规格不一致，请核对或使用新特性编号'); r.batch = text(String(r.batch || ''), '第 ' + (i + 1) + ' 行批次', 1, 100); for (const k of ['charId', 'location', 'product', 'owner', 'unit', 'ts']) r[k] = text(String(r[k] || ''), k, 0, 100); if (r.ts && !Number.isFinite(Date.parse(r.ts))) fail('第 ' + (i + 1) + ' 行时间无效'); return r; });
+    const aliases = { charId: ['charId', '特性编号'], name: ['name', 'charName', '特性名称', '特性'], value: ['value', '测量值', '实测值'], lsl: ['lsl', '下限', '规格下限'], usl: ['usl', '上限', '规格上限'], batch: ['batch', '批次', '批号'], location: ['location', 'workshop', '车间', '工序'], station: ['station', '工位'], shift: ['shift', '班次'], supplier: ['supplier', '供应商'], operator: ['operator', '操作者', '检验员'], vin: ['vin', 'VIN', '车架号'], subgroup: ['subgroup', '子组'], product: ['product', 'model', '产品'], owner: ['owner', '责任人'], unit: ['unit', '单位'], ts: ['ts', '时间', '测量时间'] };
+    const rows = data.map((row, i) => {
+      requireObject(row);
+      const r = {};
+      for (const [key, names] of Object.entries(aliases)) r[key] = names.map((n) => row[n]).find((v) => v != null && String(v).trim() !== '');
+      const ch = r.charId && store.col('spcChars').get(String(r.charId));
+      r.name = text(String(r.name ?? ch?.name ?? ''), '第 ' + (i + 1) + ' 行特性名称', 1, 100);
+      r.value = numeric(r.value, '第 ' + (i + 1) + ' 行测量值');
+      r.lsl = numeric(r.lsl ?? ch?.lsl, '规格下限');
+      r.usl = numeric(r.usl ?? ch?.usl, '规格上限');
+      if (r.lsl >= r.usl) fail('规格下限须小于上限');
+      if (ch && (r.lsl !== ch.lsl || r.usl !== ch.usl)) fail('已有特性的规格不一致，请核对或使用新特性编号');
+      r.batch = text(String(r.batch ?? ''), '第 ' + (i + 1) + ' 行批次', 1, 100);
+      for (const k of ['charId', 'location', 'station', 'shift', 'supplier', 'operator', 'vin', 'subgroup', 'product', 'owner', 'unit', 'ts']) r[k] = text(String(r[k] ?? ''), k, 0, 100);
+      if (r.ts && !Number.isFinite(Date.parse(r.ts))) fail('第 ' + (i + 1) + ' 行时间无效');
+      return r;
+    });
     const standards = new Map(); for (const r of rows) { const key = r.charId || r.name; const spec = JSON.stringify([r.lsl, r.usl]); if (standards.has(key) && standards.get(key) !== spec) fail('同一特性的规格限不一致'); standards.set(key, spec); }
     for (const [key, p] of previews) if (Date.parse(clock()) - p.at > 900000) previews.delete(key);
     if (previews.size >= 20) previews.delete(previews.keys().next().value);
@@ -188,7 +203,18 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     const result = tx(() => {
       const prior = store.col('operationImports').one((r) => r.fingerprint === p.fingerprint); if (prior) return { imported: 0, skipped: p.rows.length, duplicate: true, importId: prior.id };
       const at = clock();
-      for (const r of p.rows) { let ch = r.charId && store.col('spcChars').get(r.charId); if (!ch && !r.charId) ch = store.col('spcChars').one((v) => v.name === r.name && v.lsl === r.lsl && v.usl === r.usl && v.workshop === r.location); if (!ch) ch = store.col('spcChars').insert({ ...(r.charId ? { id: r.charId } : {}), name: r.name, lsl: r.lsl, usl: r.usl, model: r.product, workshop: r.location, owner: owner(r.owner), unit: r.unit }); store.col('measurements').insert({ charId: ch.id, charName: ch.name, value: r.value, batch: r.batch, model: r.product || ch.model, workshop: r.location || ch.workshop, unit: r.unit || ch.unit, ts: r.ts ? new Date(r.ts).toISOString() : at, source: '运营导入' }); }
+      for (const r of p.rows) {
+        let ch = r.charId && store.col('spcChars').get(r.charId);
+        if (ch && (r.lsl !== ch.lsl || r.usl !== ch.usl)) fail('特性规格在预检后已变化，请重新预检', 409);
+        if (!ch && !r.charId) ch = store.col('spcChars').one((v) => v.name === r.name && v.lsl === r.lsl && v.usl === r.usl &&
+          v.workshop === r.location && v.model === r.product && (v.station || '') === r.station);
+        if (!ch) ch = store.col('spcChars').insert({ ...(r.charId ? { id: r.charId } : {}), name: r.name, lsl: r.lsl, usl: r.usl,
+          model: r.product, workshop: r.location, station:r.station, owner: owner(r.owner), unit: r.unit });
+        store.col('measurements').insert({ charId: ch.id, charName: ch.name, value: r.value, batch: r.batch, model: r.product || ch.model,
+          workshop: r.location || ch.workshop, station:r.station || ch.station || '', shift:r.shift, supplier:r.supplier,
+          operator:r.operator, vin:r.vin, ...(r.subgroup ? {subgroup:r.subgroup} : {}), unit: r.unit || ch.unit,
+          ts: r.ts ? new Date(r.ts).toISOString() : at, source: '运营导入' });
+      }
       const rec = store.col('operationImports').insert({ filename: p.filename, fingerprint: p.fingerprint, count: p.rows.length, at }); event(null, '已接收 ' + p.filename + '，共 ' + p.rows.length + ' 条测量'); return { imported: p.rows.length, skipped: 0, importId: rec.id };
     });
     if (!result.duplicate && policy().enabled) scan('导入即时筛查'); return result;

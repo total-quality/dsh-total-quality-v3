@@ -53,6 +53,12 @@ const DEFAULT_DB = {
   members: [],
   defects: [],
   pendingActions: [],
+  operationCases: [],
+  operationEvents: [],
+  operationImports: [],
+  analysisRecords: [],
+  materials: [],
+  bom: [],
 };
 
 class Store {

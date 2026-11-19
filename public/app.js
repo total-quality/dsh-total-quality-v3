@@ -105,6 +105,7 @@ global.Scale = {
   async function loadBootstrap() {
     try {
       State.bootstrap = await API.bootstrap();
+      document.getElementById('sampleDataBadge').hidden = !State.bootstrap.hasSampleData;
       const cfg = (State.bootstrap.settings || {}).llm || {};
       const chip = document.getElementById('chipModel');
       chip.textContent = cfg.hasApiKey ? (cfg.model || '模型已配置') : '模型未配置';
@@ -318,7 +319,6 @@ global.Scale = {
     },
     profile: async () => {
       const s = State.bootstrap || (await API.bootstrap());
-      const push = (s.settings || {}).push || {};
       const org = s.org || {};
       const orgName = org.company || '某制造型企业';
       const deptName = org.dept || '质量改进部门';
@@ -326,10 +326,7 @@ global.Scale = {
         width: 'narrow', title: '当前用户', sub: orgName + ' · ' + deptName,
         body: infoGrid([
           ['身份', '我（本机使用者）'], ['部门', deptName],
-          ['权限', '质量改进工程师（可发起审批、发现问题、推进 8D）'],
-          ['AI 晨报推送', '每日 07:30 · ' + ((push.channels || []).join(' + ') || '企微 + 邮件')],
-          ['判异预警', 'ABC 级质量问题实时推送'],
-          ['报告草稿默认汇报', '质量部部长'],
+          ['工作范围', '发现问题、站内审批与推进 8D'],
           ['数据范围', Object.entries(s.counts || {}).map(([k, v]) => k + ' ' + v).join(' · '), true],
         ]),
         footer: `${act('个性化设置', 'goto', { page: 'settings' }, 'btn btn-primary')}${act('初始设置', 'goto', { page: 'init' }, 'btn')}${act('关闭', '__closeModal', {}, 'btn')}`,
@@ -376,7 +373,7 @@ global.Scale = {
       });
     },
     chatLoad: async (a) => {
-      const r = await API.get('/qip-real-v3/api/chats/' + a.id);
+      const r = await API.get('/qip-real-v3/api/chats/' + encodeURIComponent(a.id));
       if (!r.row) return toast('会话不存在', 'err');
       Chat.sessionId = a.id;
       Chat.messages = (r.row.messages || []).map((m) => ({ role: m.role, content: m.content, trace: m.trace || [], sources: m.sources || [], pending: [], thinkingDone: true }));
@@ -441,13 +438,13 @@ global.Scale = {
     },
     morningAi: () => { closeModal(); Actions.aiQuick({ q: '请基于晨报数据做深入分析：指出今天最该处理的 3 件事，每件给出责任人、时限和验证方式' }); },
     todoDone: async (a) => {
-      await API.put('/qip-real-v3/api/todos/' + a.id, { done: true });
+      await API.put('/qip-real-v3/api/todos/' + encodeURIComponent(a.id), { done: true });
       toast('已完成', 'ok'); refresh();
     },
 
     /* ---------- 问题库 ---------- */
     issueDetail: async (a) => {
-      const r = await API.get('/qip-real-v3/api/issues/' + a.id);
+      const r = await API.get('/qip-real-v3/api/issues/' + encodeURIComponent(a.id));
       const x = r.row; if (!x) return toast('问题不存在', 'err');
       // 工位串里可能已带车间名前缀（如「四车间三线·充电口盖安装」），避免重复拼
       const wsName = x.workshop || '';
@@ -485,18 +482,18 @@ global.Scale = {
     },
     issueSave: async (a) => {
       const body = UI.readForm(document.querySelector('.dm-panel'));
-      await API.put('/qip-real-v3/api/issues/' + a.id, body);
+      await API.put('/qip-real-v3/api/issues/' + encodeURIComponent(a.id), body);
       closeModal(); toast('已保存', 'ok'); refresh();
     },
-    newIssue: () => {
+    newIssue: (a = {}) => {
       modal({
         width: 'narrow', title: '发现问题', sub: '保存时会自动做同构去重与相似案例匹配',
         body: `<div class="form-row"><div class="fl">问题简述 *</div><div class="fc">${UI.input('title', '', { placeholder: '一句话描述' })}</div></div>
                <div class="form-row"><div class="fl">详细描述</div><div class="fc">${UI.input('description', '', { type: 'textarea', rows: 3, placeholder: '现象、量化数据、发生时间、涉及批次/台数' })}</div></div>
                <div class="form-row"><div class="fl">产品</div><div class="fc">${UI.input('model', PD()[0], { type: 'select', options: PD() })}</div></div>
-               <div class="form-row"><div class="fl">车间</div><div class="fc">${UI.input('workshop', WS()[3], { type: 'select', options: WS() })}</div></div>
+               <div class="form-row"><div class="fl">车间</div><div class="fc">${UI.input('workshop', WS()[0], { type: 'select', options: WS() })}</div></div>
                <div class="form-row"><div class="fl">工位</div><div class="fc">${UI.input('station', '', {})}</div></div>
-               <div class="form-row"><div class="fl">来源</div><div class="fc">${UI.input('source', '现场', { type: 'select', options: ['现场', 'MES', 'AI 质检', '检验', '市场'] })}</div></div>
+               <div class="form-row"><div class="fl">来源</div><div class="fc">${UI.input('source', a.source || '现场', { type: 'select', options: ['现场', 'MES', 'AI 质检', '检验', '市场'] })}</div></div>
                <div class="form-row"><div class="fl">等级</div><div class="fc">${UI.input('severity', 'B', { type: 'select', options: [{ value: 'A', label: 'A（安全/法规/已流出）' }, { value: 'B', label: 'B（批量风险）' }, { value: 'C', label: 'C（个案）' }] })}</div></div>
                <div class="form-row"><div class="fl">责任人</div><div class="fc">${UI.input('owner', '', {})}</div></div>
                <div class="imp-hint" style="margin:14px 0 0;">
@@ -529,7 +526,6 @@ global.Scale = {
       } catch (e) { toast('发现问题失败：' + e.message, 'err'); }
     },
     issueAi: (a) => { closeModal(); Actions.aiQuick({ q: '针对新发现的问题 ' + a.id + '（' + a.title + '），请给出：①同构问题与重复发生判断 ②按置信度排序的根因假设与验证方法 ③临时围堵措施 ④是否需要升级为 8D 项目' }); },
-    filterIssues: () => toast('列表已按条件显示全部问题', 'ok'),
     /* 问题清单：A/B/C 分类筛选与分组折叠 */
     issueSev: (a) => {
       if (global.issueView) { global.issueView.sev = a.sev || 'all'; if (a.sev && a.sev !== 'all') global.issueView.open[a.sev] = true; }
@@ -549,7 +545,7 @@ global.Scale = {
     newProject: async (pre) => {
       pre = pre || {};
       let issue = null;
-      if (pre.issueId) { try { const r = await API.get('/qip-real-v3/api/issues/' + pre.issueId); issue = r.row; } catch (e) {} }
+      if (pre.issueId) { try { const r = await API.get('/qip-real-v3/api/issues/' + encodeURIComponent(pre.issueId)); issue = r.row; } catch (e) {} }
       const members = (State.bootstrap && State.bootstrap.settings) ? null : null;
       modal({
         width: 'narrow', title: '创立改进项目（8D）', sub: '平台会按技能图谱自动推荐团队并生成阶段 SLA',
@@ -584,7 +580,7 @@ global.Scale = {
       } catch (e) { toast('立项失败：' + e.message, 'err'); }
     },
     projectDetail: async (a) => {
-      const r = await API.get('/qip-real-v3/api/projects/' + a.id);
+      const r = await API.get('/qip-real-v3/api/projects/' + encodeURIComponent(a.id));
       const p = r.row; if (!p) return toast('项目不存在', 'err');
       const STAGE_DEF = global.STAGE_DEF;
       const cur = STAGE_DEF.find((s) => s[0] === p.stage) || [];
@@ -644,7 +640,7 @@ global.Scale = {
       modal({
         width: 'narrow', title: '发起 QRQC', sub: 'A 级问题 2h 内必须响应',
         body: `<div class="form-row"><div class="fl">层级</div><div class="fc">${UI.input('level', '车间', { type: 'select', options: ['班组', '车间', '厂级'] })}</div></div>
-               <div class="form-row"><div class="fl">车间</div><div class="fc">${UI.input('workshop', WS()[3], { type: 'select', options: WS() })}</div></div>
+               <div class="form-row"><div class="fl">车间</div><div class="fc">${UI.input('workshop', WS()[0], { type: 'select', options: WS() })}</div></div>
                <div class="form-row"><div class="fl">产品</div><div class="fc">${UI.input('model', PD()[0], { type: 'select', options: PD() })}</div></div>
                <div class="form-row"><div class="fl">议题 *</div><div class="fc">${UI.input('topic', '', {})}</div></div>
                <div class="form-row"><div class="fl">问题描述 *</div><div class="fc">${UI.input('problem', '', { type: 'textarea', rows: 3, placeholder: '含量化数据' })}</div></div>
@@ -661,12 +657,21 @@ global.Scale = {
       if (!r.ok) return toast(r.result.error || '发起失败', 'err');
       closeModal(); toast('已发起 ' + r.result.QRQC编号, 'ok'); refresh();
     },
+    qrqcDetail: async (a) => {
+      const { row } = await API.get('/qip-real-v3/api/qrqc/' + encodeURIComponent(a.id));
+      let minutes;
+      try { minutes = JSON.parse(row.minutes || 'null'); } catch { minutes = null; }
+      modal({title:row.topic, sub:row.id, width:'wide', body:
+        infoGrid([['问题',esc(row.problem || ''),true],['临时措施',esc(row.tempAction || ''),true],
+          ['首次响应',esc(row.responseNote || '尚无'),true],['闭环依据',esc(row.closureNote || '尚无'),true]])
+        + table(['问题','措施','责任人','期限（小时）'], (minutes?.items || []).map((item)=>[esc(item.problem),esc(item.tempAction),esc(item.owner),esc(item.dueHours)])) });
+    },
     qrqcMinutes: async (a) => {
-      const r = await API.get('/qip-real-v3/api/qrqc/' + a.id);
+      const r = await API.get('/qip-real-v3/api/qrqc/' + encodeURIComponent(a.id));
       const q = r.row; if (!q) return toast('记录不存在', 'err');
       modal({
         width: 'narrow', title: '生成 QRQC 纪要', sub: a.id + ' ' + (q.topic || ''),
-        body: `<div style="font-size:12px;color:#5e6b85;line-height:1.9;margin-bottom:10px;">AI 将把会议内容结构化为「问题 / 临时措施 / 责任人 / 期限」四要素，并自动派工到个人待办。</div>
+        body: `<div style="font-size:12px;color:#5e6b85;line-height:1.9;margin-bottom:10px;">核对问题、临时措施、责任人和期限。保存后，新措施会加入站内待办。</div>
                <div class="form-row"><div class="fl">议题/问题</div><div class="fc">${UI.input('problem', q.problem || q.topic || '', { type: 'textarea', rows: 2 })}</div></div>
                <div class="form-row"><div class="fl">临时措施</div><div class="fc">${UI.input('tempAction', q.tempAction || '', { type: 'textarea', rows: 2 })}</div></div>
                <div class="form-row"><div class="fl">责任人</div><div class="fc">${UI.input('owner', q.owner || '', {})}</div></div>
@@ -676,14 +681,14 @@ global.Scale = {
     },
     qrqcMinutesDo: async (a) => {
       const f = UI.readForm(document.querySelector('.dm-panel'));
-      const r = await API.tool('qrqc_minutes', { id: a.id, items: [{ problem: f.problem, tempAction: f.tempAction, owner: f.owner, dueHours: Number(f.dueHours) || 24 }] });
+      const r = await API.tool('qrqc_minutes', { id: a.id, items: [{ problem: f.problem, tempAction: f.tempAction, owner: f.owner, dueHours: f.dueHours === '' ? 24 : Number(f.dueHours) }] });
       if (!r.ok) return toast('生成失败', 'err');
       closeModal(); toast('纪要已生成并派工 ' + r.result.生成任务数 + ' 项', 'ok'); refresh();
     },
     voiceReport: (a) => {
       modal({
-        width: 'narrow', title: '🎤 现场语音报问题', sub: '一句话 → 结构化问题单',
-        body: `<div style="font-size:12px;color:#5e6b85;line-height:1.9;margin-bottom:10px;">直接口述或输入现场情况，平台自动识别产品/车间/工位/缺陷类别/等级，并匹配相似历史案例。</div>
+        width: 'narrow', title: '现场描述报问题', sub: '一句话 → 结构化问题单',
+        body: `<div style="font-size:12px;color:#5e6b85;line-height:1.9;margin-bottom:10px;">输入现场情况或粘贴已有转写文本。系统按关键词提取产品、车间和风险等级，并检索相似经验。</div>
                <div class="form-row"><div class="fl">现场描述 *</div><div class="fc">${UI.input('text', (a && a.text) || '', { type: 'textarea', rows: 3, placeholder: '例如：四车间三线右后门关门声发闷，连续第三台' })}</div></div>
                <div class="form-row"><div class="fl">报告人</div><div class="fc">${UI.input('reporter', '现场', {})}</div></div>`,
         footer: `${act('取消', '__closeModal', {}, 'btn')}${act('识别并录入', 'voiceDo', {}, 'btn btn-primary')}`,
@@ -697,7 +702,7 @@ global.Scale = {
       const res = r.result;
       closeModal();
       modal({
-        width: 'wide', title: '✅ 已发现问题 ' + res.问题编号, sub: 'AI 结构化提取结果',
+        width: 'wide', title: '✅ 已发现问题 ' + res.问题编号, sub: '规则提取结果，请核对',
         body: infoGrid(Object.entries(res.结构化结果).map(([k, v]) => [k, esc(v)])) +
           `<div style="font-size:12.5px;font-weight:700;margin:14px 0 8px;">相似历史案例</div>` +
           (res.相似历史案例 && res.相似历史案例.length ? res.相似历史案例.map((k) => `<div class="list-row" data-act="kbDetail" data-args='${esc(JSON.stringify({ id: k.编号 }))}'><div style="flex:1;"><b>${esc(k.标题)}</b></div><span style="font-size:11px;color:#1a56db;">相关度 ${k.相关度}</span></div>`).join('') : empty('暂无匹配案例')),
@@ -712,9 +717,9 @@ global.Scale = {
         width: 'narrow', title: '收益测算', sub: '按财务核定口径（仅计直接损失）',
         body: `<div class="form-row"><div class="fl">平台特性（自动取改善前超差率）</div><div class="fc"><input class="inp" data-field="charId" placeholder="如 CT-0378（留空则手填）"/></div></div>
                <div class="form-row"><div class="fl">改善前损失率</div><div class="fc">${UI.input('baselineRate', '', { type: 'number', placeholder: '如 0.034' })}</div></div>
-               <div class="form-row"><div class="fl">改善后目标损失率</div><div class="fc">${UI.input('targetRate', 0.005, { type: 'number' })}</div></div>
-               <div class="form-row"><div class="fl">年产量（台）</div><div class="fc">${UI.input('annualVolume', 120000, { type: 'number' })}</div></div>
-               <div class="form-row"><div class="fl">单件损失（元）</div><div class="fc">${UI.input('unitLoss', 180, { type: 'number' })}</div></div>
+               <div class="form-row"><div class="fl">改善后目标损失率</div><div class="fc">${UI.input('targetRate', '', { type: 'number', placeholder: '如 0.005' })}</div></div>
+               <div class="form-row"><div class="fl">年产量（台）</div><div class="fc">${UI.input('annualVolume', '', { type: 'number' })}</div></div>
+               <div class="form-row"><div class="fl">单件损失（元）</div><div class="fc">${UI.input('unitLoss', '', { type: 'number' })}</div></div>
                <div class="form-row"><div class="fl">一次性投入（元）</div><div class="fc">${UI.input('oneTimeCost', '', { type: 'number' })}</div></div>`,
         footer: `${act('取消', '__closeModal', {}, 'btn')}${act('测算', 'benefitCalcDo', {}, 'btn btn-primary')}`,
       });
@@ -734,35 +739,70 @@ global.Scale = {
           infoGrid(Object.entries(r.result.输入).map(([k, v]) => [k, esc(v)])) +
           `<div style="font-size:12px;font-weight:700;margin:14px 0 6px;">财务口径说明</div><div style="font-size:12px;line-height:1.9;color:#33415c;">${r.result.财务口径说明.map((x) => '· ' + esc(x)).join('<br>')}</div>` +
           (r.result.数据说明 && r.result.数据说明.length ? `<div style="font-size:11.5px;color:#8791a5;margin-top:10px;">数据说明：${r.result.数据说明.map(esc).join('；')}</div>` : ''),
-        footer: `${act('提交财务核定', 'benefitSubmitDo', { amount: r.result.结果.年化收益万元, note: '由 AI 测算提交' }, 'btn btn-primary')}${act('关闭', '__closeModal', {}, 'btn')}`,
+        footer: `${act('提交财务核定', 'benefitSubmitDo', { amount: r.result.结果.年化收益万元, note: '由本地测算提交', formula: r.result.测算过程 }, 'btn btn-primary')}${act('关闭', '__closeModal', {}, 'btn')}`,
       });
     },
     benefitSubmitDo: async (a) => {
-      const r = await API.tool('fin_submit_benefit', { amount: a.amount, note: a.note || '', type: '报废降损', period: new Date().toISOString().slice(0, 7) });
+      const r = await API.tool('fin_submit_benefit', { amount: a.amount, note: a.note || '', formula: a.formula, type: '报废降损', period: new Date().toISOString().slice(0, 7) });
       if (!r.ok) return toast('提交失败', 'err');
-      closeModal(); toast('已提交财务核定：' + r.result.收益单号, 'ok'); refresh();
+      closeModal(); toast('已保存待核定记录：' + r.result.收益单号, 'ok'); refresh();
     },
-    submitBenefit: async (a) => {
-      const r = await API.put('/qip-real-v3/api/benefits/' + a.id, { status: 'verified' });
-      toast('已提交（本地环境可直接置为已核定）', 'ok'); refresh();
+    submitBenefit: (a) => Actions.localDecision({ group: 'benefits', id: a.id, decision: 'verify' }),
+    localDecision: async (a) => {
+      const path = '/qip-real-v3/api/' + a.group + '/' + encodeURIComponent(a.id);
+      const { row } = await API.get(path);
+      const labels = { respond: '记录首次响应', close: '确认闭环', verify: '核定收益', approve: '批准', reject: '驳回' };
+      const approvers = (row.approvers || []).filter((item) => item.status === 'pending').map((item) => item.name);
+      const who = a.group === 'benefits' ? row.verifiedBy : a.group === 'qrqc' ? row.owner : '';
+      modal({
+        title: labels[a.decision], sub: row.title || row.topic || row.id, width: 'narrow',
+        body: `<div class="op-form"><label class="op-field full">经办人${UI.input('author', approvers[0] || who || '', approvers.length ? {type:'select',options:approvers} : {})}</label>
+          ${a.decision === 'verify' ? '<label class="op-field full">实际核定金额（万元）' + UI.input('amount', row.amount, {type:'number'}) + '</label>' : ''}
+          <label class="op-field full">处理依据${UI.input('note','',{type:'textarea',rows:3,placeholder:'填写执行事实或依据编号'})}</label></div>`,
+        footer: act('保存决定','saveDecision', a, 'btn btn-primary') + act('取消','__closeModal',{},'btn'),
+      });
+    },
+    saveDecision: async (a, element) => {
+      if (element.dataset.saving) return;
+      element.dataset.saving = '1';
+      try {
+        const values = UI.readForm(document.querySelector('.dm-panel'));
+        const path = '/qip-real-v3/api/' + a.group + '/' + encodeURIComponent(a.id) + '/decision';
+        await API.post(path, { ...values, action: a.decision });
+        closeModal(); toast('处理结果已保存', 'ok'); await refresh();
+      } finally { delete element.dataset.saving; }
     },
 
     /* ---------- 报表与导出 ---------- */
     genReport: async (a) => {
-      modal({ width: 'narrow', title: '正在生成报告…', body: loadingBlock('智能体正在汇总真实数据并生成 Word 文档（约 2~10 秒）') });
+      const projectTypes = ['8D报告','根因分析报告'];
+      if (projectTypes.includes(a.type)) {
+        const { rows } = await API.get('/qip-real-v3/api/projects', { limit:1000 });
+        if (!rows.length) return toast('请先建立改进项目', 'warn');
+        return modal({ title:'选择报告关联的项目', sub:a.type, width:'narrow',
+          body:UI.input('projectId',rows[0].id,{type:'select',options:rows.map((r)=>({value:r.id,label:r.id + ' ' + r.title}))}),
+          footer: act('生成 Word','runReport',a,'btn btn-primary') });
+      }
+      if (a.type === 'SPC分析报告') {
+        const { chars } = await API.get('/qip-real-v3/api/spc/chars');
+        if (!chars.length) return toast('请先导入测量数据', 'warn');
+        return modal({ title:'选择报告特性', width:'narrow',
+          body:UI.input('scope',chars[0].编号,{type:'select',options:chars.map((r)=>({value:r.编号,label:r.编号 + ' ' + r.名称}))}),
+          footer: act('生成 Word','runReport',a,'btn btn-primary') });
+      }
+      await Actions.runReport(a);
+    },
+    runReport: async (a) => {
+      const form = document.querySelector('.dm-panel');
+      const { projectId, scope } = form ? UI.readForm(form) : {};
+      modal({ width:'narrow', title:'正在生成报告', body:loadingBlock('正在按本机数据生成 Word') });
       try {
-        const r = await API.tool('report_generate', { type: a.type, period: new Date().toISOString().slice(0, 7) });
-        if (!r.ok) { closeModal(); return toast('生成失败：' + (r.result.error || ''), 'err'); }
-        const res = r.result;
-        closeModal();
-        modal({
-          width: 'narrow', title: '✅ 报告已生成', sub: res.报告标题,
-          body: infoGrid([['报告编号', res.报告编号], ['格式', res.格式], ['文件大小', res.文件大小], ['章节', (res.章节 || []).join(' / '), true], ['内容摘要', esc(res.内容摘要 || ''), true]]) +
-            `<div style="margin-top:12px;"><a class="btn btn-primary" href="${esc(res.下载链接)}">下载 Word 文档</a></div>`,
-          footer: `${act('关闭', '__closeModal', {}, 'btn')}`,
-        });
-        refresh();
-      } catch (e) { closeModal(); toast('生成失败：' + e.message, 'err'); }
+        const { result } = await API.tool('report_generate', { type:a.type, projectId, scope });
+        modal({ title:'报告已生成', sub:result.报告标题, width:'narrow',
+          body:infoGrid([['编号',esc(result.报告编号)],['格式',esc(result.格式)],['状态','草稿']]),
+          footer:'<a class="btn btn-primary" href="' + esc(result.下载链接) + '">下载 Word</a>' + act('关闭','__closeModal',{},'btn') });
+        await refresh();
+      } catch (error) { closeModal(); toast('生成失败：' + error.message,'err'); }
     },
     exportData: async (a) => {
       toast('正在导出，请稍候…', 'ai');
@@ -794,7 +834,7 @@ global.Scale = {
     kbType: async (a) => { global.KBState.type = a.type; global.KBState.results = null; await go('knowledge'); },
     kbCat: async (a) => { global.KBState.category = a.category; global.KBState.results = null; await go('knowledge'); },
     kbDetail: async (a) => {
-      const r = await API.get('/qip-real-v3/api/knowledge/' + a.id);
+      const r = await API.get('/qip-real-v3/api/knowledge/' + encodeURIComponent(a.id));
       const k = r.row; if (!k) return toast('条目不存在', 'err');
       modal({
         width: 'wide', title: '📚 ' + k.title, sub: k.id + ' · ' + k.type + ' · ' + (k.category || ''),
@@ -803,6 +843,7 @@ global.Scale = {
             <b style="color:#1a56db;">原因：</b>${esc(k.cause || '—')}<br><br>
             <b style="color:#1a56db;">对策：</b>${esc(k.action || '—')}<br><br>
             <b style="color:#1a56db;">效果：</b>${esc(k.effect || '—')}</div>` +
+          (k.content ? '<div style="white-space:pre-wrap;margin-top:12px">' + esc(k.content) + '</div>' : '') +
           infoGrid([['类型', tag(k.type, 'purple')], ['类别', esc(k.category || '')], ['作者', esc(k.author || '')], ['浏览', k.views || 0], ['出处', esc(k.source || ''), true], ['标签', (k.tags || []).map((t) => tag(t, 'gray')).join(' ') || '—', true]]),
         footer: `${act('让 AI 结合本条分析我的问题', 'aiQuick', { q: '请参考知识库条目 ' + k.id + '「' + k.title + '」的方法论，结合平台真实数据，给出可执行的排查与处置步骤' }, 'btn btn-ai')}${act('关闭', '__closeModal', {}, 'btn')}`,
       });
@@ -847,20 +888,11 @@ global.Scale = {
       if (!r.ok) return toast('提交失败', 'err');
       closeModal(); toast('已发起审批 ' + r.result.审批单号, 'ok'); refresh();
     },
-    approveWf: async (a) => {
-      const w = (await API.get('/qip-real-v3/api/workflows/' + a.id)).row;
-      const approvers = (w.approvers || []).map((x) => ({ name: x.name, role: x.role, status: 'approved', at: new Date().toISOString() }));
-      await API.put('/qip-real-v3/api/workflows/' + a.id, { status: 'approved' });
-      await API.post('/qip-real-v3/api/workflows/' + a.id, {});
-      const all = await API.get('/qip-real-v3/api/workflows', { limit: 500 });
-      toast('已批准 ' + a.id, 'ok');
-      // 补充审批人状态
-      try { storeFixApprovers(a.id, approvers); } catch (e) {}
-      refresh();
-    },
-    rejectWf: async (a) => { await API.put('/qip-real-v3/api/workflows/' + a.id, { status: 'rejected' }); toast('已驳回 ' + a.id, 'warn'); refresh(); },
+    openOperation: (a) => global.OperationsUI.detail(a.id),
+    approveWf: (a) => Actions.localDecision({ group:'workflows', id:a.id, decision:'approve' }),
+    rejectWf: (a) => Actions.localDecision({ group:'workflows', id:a.id, decision:'reject' }),
     wfDetail: async (a) => {
-      const w = (await API.get('/qip-real-v3/api/workflows/' + a.id)).row;
+      const w = (await API.get('/qip-real-v3/api/workflows/' + encodeURIComponent(a.id))).row;
       modal({
         width: 'narrow', title: '审批单 ' + w.id, sub: w.type,
         body: infoGrid([['标题', esc(w.title)], ['申请人', esc(w.applicant)], ['关联编号', esc(w.relatedId || '—')], ['状态', esc(w.status)], ['提交时间', dt(w.createdAt)], ['加急', w.urgent ? '是' : '否'], ['审批内容', esc(w.content || ''), true], ['AI 摘要', esc(w.aiSummary || ''), true]]) +
@@ -868,13 +900,6 @@ global.Scale = {
       });
     },
 
-    /* ---------- 设置 ---------- */
-    applyPreset: (a) => {
-      const P = { deepseek: ['https://api.deepseek.com', 'deepseek-chat', 'deepseek-reasoner'], onprem: ['http://10.0.0.100:8000/v1', 'deepseek-r1-32b', 'deepseek-r1-32b'], ollama: ['http://127.0.0.1:11434/v1', 'deepseek-r1:14b', 'deepseek-r1:14b'], gateway: ['https://your-gateway.example.com/v1', 'deepseek-chat', 'deepseek-reasoner'] }[a.key];
-      const set = (field, val) => { const el = document.querySelector('[data-field="' + field + '"]'); if (el) el.value = val; };
-      set('llm.baseUrl', P[0]); set('llm.model', P[1]); set('llm.reasonerModel', P[2]);
-      toast('已填充预设，请补充 API Key 后保存', 'ok');
-    },
     /* ---------- 初始设置：命名 ---------- */
     addWs: () => {
       const d = initDraftFromForm();
@@ -1092,48 +1117,23 @@ global.Scale = {
         await go('settings');
       }
     },
-    troubleshoot: () => {
-      modal({
-        width: 'wide', title: '连接失败排查指南', sub: '99% 的问题出在这几处',
-        body: `<div style="font-size:12.5px;line-height:2;">
-          <b>① 401 / 403</b>：API Key 错误或已过期。DeepSeek 官方 Key 在 <code>platform.deepseek.com</code> 创建；注意不要有多余空格。<br>
-          <b>② 404</b>：Base URL 写错。官方是 <code>https://api.deepseek.com</code>（不要加 <code>/v1/chat/completions</code>）；自建 vLLM/Ollama 通常要写成 <code>http://IP:端口/v1</code>。<br>
-          <b>③ 402</b>：账户余额不足。<br>
-          <b>④ 连接超时 / ENOTFOUND</b>：本机无法访问外网，或自建服务未启动。可先在本机浏览器打开 Base URL 验证。<br>
-          <b>⑤ 工具调用失败（第 ③ 步不通过）</b>：所选模型不支持 function calling。请换用 <code>deepseek-chat</code> 或支持 tools 的模型；否则智能体只能聊天、无法查数。<br>
-          <b>⑥ 流式不通过（第 ④ 步）</b>：网关屏蔽了 SSE。可在「模型接入」中关闭「流式输出」开关。<br>
-          <b>⑦ 数据不出厂要求</b>：把 Base URL 指向厂内私有化 OpenAI 兼容端点（vLLM / TGI / Ollama），并把 API Key 按厂内网关要求填写。
-        </div>`,
-      });
-    },
     pluginConfig: (a) => {
-      const s = State.bootstrap.settings.plugins[a.key];
-      modal({
-        width: 'narrow', title: '配置插件 ' + s.name, sub: s.desc,
-        body: `<div class="form-row"><div class="fl">启用</div><div class="fc">${UI.input('p.enabled', s.enabled !== false, { type: 'checkbox', label: '启用该插件（停用后其工具将从模型中移除）' })}</div></div>
-               <div class="form-row"><div class="fl">数据模式</div><div class="fc">${UI.input('p.mode', s.mode || 'local', { type: 'select', options: [{ value: 'local', label: '本地数据仓（平台内数据，可导入 Excel）' }, { value: 'http', label: 'HTTP 直连真实系统' }] })}</div></div>
-               <div class="form-row"><div class="fl">接口地址</div><div class="fc">${UI.input('p.baseUrl', s.baseUrl || '', { placeholder: '如 http://mes.gz-geely.local/api' })}</div></div>
-               <div class="form-row"><div class="fl">鉴权 Key</div><div class="fc">${UI.input('p.apiKey', s.apiKey || '', { type: 'password', placeholder: '插件级 API Key' })}</div></div>
-               <div class="form-row"><div class="fl">超时（毫秒）</div><div class="fc">${UI.input('p.timeoutMs', s.timeoutMs || 30000, { type: 'number' })}</div></div>`,
-        footer: `${act('取消', '__closeModal', {}, 'btn')}${act('保存', 'pluginSave', { key: a.key }, 'btn btn-primary')}`,
-      });
+      const config = State.bootstrap.settings.plugins[a.key];
+      modal({ title: '设置工具分组', sub: config.name, width: 'narrow',
+        body: UI.input('p.enabled', config.enabled !== false, { type:'checkbox', label:'在 AI 工作助手中启用此分组' }),
+        footer: act('保存','pluginSave', { key:a.key },'btn btn-primary') });
     },
     pluginSave: async (a) => {
-      const f = UI.readForm(document.querySelector('.dm-panel'));
-      await API.post('/qip-real-v3/api/settings', { settings: { plugins: { [a.key]: { enabled: f['p.enabled'], mode: f['p.mode'], baseUrl: f['p.baseUrl'], apiKey: f['p.apiKey'], timeoutMs: Number(f['p.timeoutMs']) || 30000 } } } });
-      closeModal(); toast('插件配置已保存', 'ok'); await loadBootstrap(); refresh();
+      const values = UI.readForm(document.querySelector('.dm-panel'));
+      await API.post('/qip-real-v3/api/settings', { settings:{plugins:{ [a.key]:{ enabled:values['p.enabled'], mode:'local' }}} });
+      closeModal(); toast('工具分组已保存', 'ok'); await refresh();
     },
-    pluginGuide: () => modal({
-      width: 'wide', title: '插件接入说明', sub: '新增系统只开发适配器，主平台零改造',
-      body: `<div style="font-size:12.5px;line-height:2;">
-        <b>1. 插件协议</b>：每个插件声明 <code>manifest</code>（能力声明 + 参数 JSON Schema）+ <code>execute()</code> + <code>healthCheck()</code>。平台已按此协议实现 51 个工具。<br>
-        <b>2. 接入方式</b>：在「系统设置 → 插件总线」把模式切为「HTTP 直连」，填写接口地址与鉴权 Key。平台会按统一协议调用，无需改主平台。<br>
-        <b>3. 降级方案</b>：真实接口未就绪时，用「数据管理 → 导入 Excel/CSV」把数据导入本地数据仓，工具体系与结论口径完全一致。<br>
-        <b>4. 鉴权与审计</b>：插件级 API Key + 用户级权限继承（OA 组织架构）；每次调用留痕（谁·何时·取了什么·用途）。<br>
-        <b>5. 超时与降级</b>：单插件超时默认 30s，失败不影响整体编排，模型会收到错误并给出替代方案。<br>
-        <b>6. 六大业务插件核心接口</b>：<code>getMeasureData / getScrapLine / getTraceByVIN / getBatchByWorkstation</code>（MES）、<code>getBOM / getBatch / getSupplier / getCost</code>（ERP）、<code>startWorkflow / pushTodo / getOrgTree</code>（OA）、<code>submitBenefit / getVerifiedBenefit</code>（FIN）、<code>getControlChart / getRuleViolations / getCpk</code>（SPC）、<code>getDefects / getImageResult</code>（AQI）。
-      </div>`,
-    }),
+    showPlugin: (a) => {
+      const tools = (State.bootstrap?.tools || []).filter((t) => t.plugin === a.plugin);
+      modal({ title: a.plugin + ' 工具目录', width:'wide',
+        body: table(['工具','用途','类型'],tools.map((t)=>[esc(t.label),esc(t.description),t.write?'读写':'只读'])) });
+    },
+    pluginGuide: () => modal({ title:'工具与数据来源', body:'<p>MES、SPC 和质检查询使用已录入或导入的本地记录。审批、派工与财务核定在当前平台留档。外部业务系统接入需单独适配。</p>' }),
     wbGuide: () => modal({
       width: 'wide', title: 'AI 工作台使用指南',
       body: `<div style="font-size:12.5px;line-height:2;">
@@ -1147,14 +1147,35 @@ global.Scale = {
         · 说「沉淀为经验卡」会把本次经验写入知识库，下次别人就能检索到
       </div>`,
     }),
-    mobileGuide: () => modal({
-      width: 'narrow', title: '移动端说明',
-      body: `<div style="font-size:12.5px;line-height:2;">
-        本页为移动端界面预览，用真实数据渲染。<br>
-        实际落地建议：一期用<b>企业微信 H5</b>（复用本平台同一套 API，零安装）；二期做<b>微信小程序</b>（项目目录中已有小程序工程可复用）。<br>
-        移动端与桌面端共用同一个 Harness 与数据，结论完全一致。
-      </div>`,
-    }),
+    memberForm: async (a) => {
+      const row = a.id ? (await API.get('/qip-real-v3/api/members/' + encodeURIComponent(a.id))).row : {};
+      modal({ title: a.id ? '编辑人员' : '新增人员', width:'narrow',
+        body: '<div class="op-form">' +
+          [['name','姓名'],['dept','部门'],['role','岗位'],['seniority','司龄（年）']].map(([key,label]) =>
+            '<label class="op-field full">' + label + UI.input(key,row[key] ?? '',key==='seniority' ? {type:'number'} : {}) + '</label>').join('') + '</div>',
+        footer: act('保存人员', 'memberSave', a, 'btn btn-primary') });
+    },
+    memberSave: async (a) => {
+      const values = UI.readForm(document.querySelector('.dm-panel'));
+      const url = '/qip-real-v3/api/members';
+      if (a.id) await API.put(url + '/' + encodeURIComponent(a.id), values);
+      else await API.post(url, values);
+      closeModal(); toast('人员已保存', 'ok'); await refresh();
+    },
+    growthForm: async (a) => {
+      const { row } = await API.get('/qip-real-v3/api/members/' + encodeURIComponent(a.id));
+      modal({ title:'成长记录', sub:row.name, width:'wide',
+        body: table(['阶段','记录','记录人','时间'], (row.growth || []).slice().reverse().map((item) => [esc(item.stage),esc(item.summary),esc(item.reviewer),dt(item.at)]), {empty:'还没有成长记录'})
+          + '<div class="op-form"><label class="op-field">阶段' + UI.input('stage','30 天',{type:'select',options:['30 天','60 天','90 天','日常训练']})
+          + '</label><label class="op-field">记录人' + UI.input('reviewer','') + '</label><label class="op-field full">训练任务、提交结果或考核记录'
+          + UI.input('summary','',{type:'textarea',rows:4}) + '</label></div>',
+        footer: act('保存成长记录','growthSave',a,'btn btn-primary') });
+    },
+    growthSave: async (a) => {
+      const values = UI.readForm(document.querySelector('.dm-panel'));
+      await API.post('/qip-real-v3/api/members/' + encodeURIComponent(a.id) + '/growth', values);
+      closeModal(); toast('成长记录已保存', 'ok'); await refresh();
+    },
 
     /* ---------- 数据管理 ---------- */
     importFile: (a) => {
@@ -1194,7 +1215,6 @@ global.Scale = {
   };
 
   /* 每次数据变更后刷新徽标 */
-  async function storeFixApprovers() { /* 占位：审批人状态由服务端 workflows 记录维护 */ }
 
   /* ==================================================================
      事件分发

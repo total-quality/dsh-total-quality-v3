@@ -89,13 +89,6 @@ function buildSystemPrompt(settings) {
 }
 
 /* ---------------- 工具执行 ---------------- */
-function pluginFilter(settings) {
-  const plugins = settings.plugins || {};
-  const disabled = new Set();
-  Object.keys(plugins).forEach((k) => { if (plugins[k] && plugins[k].enabled === false) disabled.add(plugins[k].name); });
-  return (t) => !disabled.has(t.plugin);
-}
-
 function findTool(name) { return registry.get(name); }
 
 /** 生成工具结果的"人话摘要"，用于前端调用链可视化与审计 */
@@ -152,7 +145,7 @@ async function run(p, onEvent) {
     return { ok: false, code: 'NO_API_KEY' };
   }
 
-  const tools = registry.schemas(pluginFilter(settings));
+  const tools = registry.schemas(registry.assistantFilter(settings));
   const messages = [];
   messages.push({ role: 'system', content: buildSystemPrompt(settings) });
 

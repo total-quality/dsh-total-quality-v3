@@ -8,46 +8,30 @@
 
   /* ================= P5 QRQC 快速响应 ================= */
   Pages.qrqc = {
-    title: 'QRQC 快速响应', sub: '班组 / 车间 / 厂级三级快速响应 · 2h 响应计时',
+    title: 'QRQC 快速响应', sub: '记录现场响应、临时措施、派工和闭环',
     async render() {
-      const [qrqcRes, todoRes] = await Promise.all([API.get('/qip-real-v3/api/qrqc', { limit: 100 }), API.get('/qip-real-v3/api/todos', { limit: 100 })]);
-      const rows = qrqcRes.rows || [];
-      const open = rows.filter((r) => r.status !== 'closed');
-      const todos = (todoRes.rows || []).filter((t) => !t.done);
-      const onTime = rows.length ? (rows.filter((r) => r.responseAt).length / rows.length * 100).toFixed(1) : '—';
-      return `
-      <div class="ai-strip">
-        <div class="ai-ico">🎙️</div>
-        <div class="ai-txt"><b>QRQC 智能会议：</b>现场描述/录音转写 → AI 提取「问题 / 临时措施 / 责任人 / 期限」四要素 → 自动生成纪要并经 @OA 派工到人。当前 <b>${open.length}</b> 场进行中，累计 <b>${rows.length}</b> 场，2h 响应率 <b>${onTime}%</b>。</div>
-        ${act('发起 QRQC', 'newQrqc', {}, 'btn btn-ai')}
-        ${act('现场语音报问题', 'voiceReport', {}, 'btn')}
-      </div>
-      <div class="grid g3" style="margin-bottom:14px;">
-        ${kpi({ ico: '📅', label: '进行中 QRQC', value: open.length, delta: '班组/车间/厂级三级' })}
-        ${kpi({ ico: '✅', label: '累计场次', value: rows.length, color: '#18a058', icoBg: '#e8f7ee', delta: '已闭环 ' + rows.filter((r) => r.status === 'closed').length })}
-        ${kpi({ ico: '📌', label: '未完成派工任务', value: todos.length, color: '#c8620a', icoBg: '#fff3e0', delta: '点击进入审批中心', act: 'goto', args: { page: 'approval' } })}
-      </div>
-      ${card('QRQC 会议清单', '共 ' + rows.length + ' 场',
-        table(['编号', '层级', '车间', '议题', '问题', '临时措施', '责任人', '状态', ''],
-          rows.map((r) => ({
-            cells: ['<b>' + esc(r.id) + '</b>', tag(r.level, r.level === '厂级' ? 'red' : r.level === '车间' ? 'orange' : 'blue'), esc(r.workshop || '—'), esc(r.topic || ''), esc((r.problem || '').slice(0, 40)), esc((r.tempAction || '').slice(0, 30)), esc(r.owner || ''), r.status === 'closed' ? tag('已闭环', 'green') : tag('进行中', 'orange'), r.status === 'closed' ? '' : act('生成纪要', 'qrqcMinutes', { id: r.id }, 'btn btn-sm')],
-          }))),
-        act('导出 Excel', 'exportData', { dataset: 'all' }))}
-      <div class="grid g2">
-        ${card('车间语音报问题', '自然语言 → 结构化问题单',
-          `<div style="font-size:12.5px;color:#5e6b85;line-height:1.9;margin-bottom:10px;">现场只需一句话，AI 自动识别<b>产品 / 车间 / 工位 / 缺陷类别 / 等级</b>，回填 MES 工位批次，并匹配相似历史案例。例如：<br>
-            <span style="color:#1a56db;">「四车间三线右后门关门声发闷，连续第三台」</span></div>
-          ${act('试一条（预置话术）', 'voiceReport', { text: '四车间三线右后门关门声发闷，连续第三台' }, 'btn btn-ai')}
-          ${act('输入自定义描述', 'voiceReport', {}, 'btn')}`)}
-        ${card('QRQC 有效性指标', '真实统计',
-          infoGrid([
-            ['累计会议场次', rows.length], ['已闭环', rows.filter((r) => r.status === 'closed').length],
-            ['进行中', open.length], ['2h 响应率', onTime + '%'],
-            ['派工任务总数', (todoRes.rows || []).length], ['未完成任务', todos.length],
-            ['涉及车间', [...new Set(rows.map((r) => r.workshop).filter(Boolean))].join(' / ') || '—', true],
-          ]))}
-      </div>
-      <div class="footer-note">${brand()} · QRQC</div>`;
+      const [qrqcRes,todoRes] = await Promise.all([API.get('/qip-real-v3/api/qrqc', {limit:1000,sort:'createdAt'}), API.get('/qip-real-v3/api/todos', {limit:2000})]);
+      const rows = qrqcRes.rows;
+      const ids = new Set(rows.map((r)=>r.id));
+      const todos = todoRes.rows.filter((t)=>ids.has(t.link) && !t.done);
+      const open = rows.filter((r)=>r.status!=='closed');
+      const responded = rows.filter((r)=>r.respondedAt);
+      const onTime = responded.filter((r)=>Date.parse(r.respondedAt)-Date.parse(r.createdAt)<=7200000).length;
+      return `${card('快速响应台账', open.length + ' 场未闭环 · 已记录响应中 ' + onTime + ' / ' + responded.length + ' 场在 2 小时内',
+        table(['编号 / 议题','车间与层级','责任人','首次响应','状态','操作'], rows.map((r)=>[
+          '<b>' + esc(r.id) + '</b><br>' + esc(r.topic), esc([r.workshop,r.level].filter(Boolean).join(' / ')), esc(r.owner || '待指定'),
+          r.respondedAt ? dt(r.respondedAt) + '<br>' + esc(r.respondedBy || '') : r.responseAt ? '旧记录，未核验' : '待响应',
+          r.status==='closed' ? tag('已闭环','green') : tag('进行中','orange'),
+          r.status==='closed' ? act('查看','qrqcDetail',{id:r.id},'btn btn-sm') : [
+            r.respondedAt ? '' : act('记录响应','localDecision',{group:'qrqc',id:r.id,decision:'respond'},'btn btn-sm'),
+            act('纪要与派工','qrqcMinutes',{id:r.id},'btn btn-sm'), act('确认闭环','localDecision',{group:'qrqc',id:r.id,decision:'close'},'btn btn-sm'),
+            act('查看','qrqcDetail',{id:r.id},'btn btn-sm'),
+          ].filter(Boolean).join(' '),
+        ]),{empty:'暂无 QRQC 记录'}),
+        act('发起 QRQC','newQrqc',{},'btn btn-primary') + ' ' + act('录入现场描述','voiceReport',{},'btn'))}
+       ${card('QRQC 未完成待办', todos.length + ' 项', table(['事项','责任人','期限','操作'],
+         todos.map((t)=>[esc(t.title),esc(t.user),dt(t.dueAt),act('完成','todoDone',{id:t.id},'btn btn-sm')]),{empty:'暂无未完成任务'}))}
+       <div class="footer-note">${brand()} · QRQC</div>`;
     },
   };
 
@@ -59,7 +43,9 @@
     async render() {
       const charsRes = await API.get('/qip-real-v3/api/spc/chars');
       const chars = charsRes.chars || [];
-      if (!SpcState.charId && chars.length) {
+      if (!chars.length) return card('关键特性与测量', '导入后计算控制图、判异及过程能力',
+        empty('还没有测量特性') + act('去接收测量文件', 'goto', {page:'intakeTrace'}, 'btn btn-primary'));
+      if (!chars.some((char) => char.编号 === SpcState.charId)) {
         const worst = chars.slice().sort((a, b) => (a.近7日Cpk === null ? 9 : a.近7日Cpk) - (b.近7日Cpk === null ? 9 : b.近7日Cpk))[0];
         SpcState.charId = worst ? worst.编号 : chars[0].编号;
       }
@@ -144,19 +130,20 @@
     title: '市场质量与客诉', sub: 'AI 质检 + 售后线索 + 制造过程关联分析',
     async render() {
       const [defRes, riskRes, issuesRes] = await Promise.all([
-        API.get('/qip-real-v3/api/defects', { limit: 500 }), API.tool('aqi_risk_scan', { days: 30 }), API.get('/qip-real-v3/api/issues', { source: '市场', limit: 100 }),
+        API.get('/qip-real-v3/api/defects', { days:30, limit: 5000 }), API.tool('aqi_risk_scan', { days: 30 }), API.get('/qip-real-v3/api/issues', { limit: 10000 }),
       ]);
       const defects = defRes.rows || [];
       const byType = {}; defects.forEach((d) => { byType[d.type] = (byType[d.type] || 0) + 1; });
       const total = defects.length || 1; let cum = 0;
       const pareto = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([name, value]) => { cum += value; return { name, value, cumPct: cum / total * 100 }; });
-      const byDay = {}; defects.forEach((d) => { const k = d.ts.slice(0, 10); byDay[k] = (byDay[k] || 0) + 1; });
+      const byDay = {}; defects.forEach((d) => { const k = (d.ts || d.createdAt || '').slice(0, 10); if (!k) return; byDay[k] = (byDay[k] || 0) + 1; });
       const days = Object.keys(byDay).sort();
-      const market = issuesRes.rows || [];
+      const market = (issuesRes.rows || []).filter((r) => /市场|客诉|客户反馈/.test(r.source || '') || r.kind === 'complaint');
       return `
       <div class="ai-strip">
         <div class="ai-ico">🌍</div>
-        <div class="ai-txt"><b>市场质量分析：</b>平台汇总 AI 视觉质检 <b>${defects.length}</b> 条缺陷记录与市场来源问题 <b>${market.length}</b> 起，自动交叉分析制造端缺陷与市场反馈的<b>时间与部位相关性</b>。</div>
+        <div class="ai-txt"><b>市场质量分析：</b>平台汇总 AI 视觉质检 <b>${defects.length}</b> 条缺陷记录与市场来源问题 <b>${market.length}</b> 起。可用助手核对时间、批次和部位，并区分相关线索与已验证原因。</div>
+        ${act('登记客诉','newIssue',{source:'市场'},'btn btn-primary')}
         ${act('AI 归因分析', 'aiQuick', { q: '分析 AI 质检缺陷与市场投诉的相关性，判断哪些制造缺陷可能已经流出到市场，并给出风险等级' }, 'btn btn-ai')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">
@@ -183,21 +170,22 @@
 
   /* ================= P8 改进收益核算 ================= */
   Pages.benefit = {
-    title: '改进收益核算', sub: 'AI 测算 → 财务核定 双签闭环',
+    title: '改进收益核算', sub: '录入实际成本与产量，站内核定并留档',
     async render() {
       const res = await API.get('/qip-real-v3/api/benefits', { limit: 200 });
       const rows = res.rows || [];
       const verified = rows.filter((r) => r.status === 'verified');
-      const pending = rows.filter((r) => r.status !== 'verified');
-      const byType = {}; rows.forEach((r) => { byType[r.type] = (byType[r.type] || 0) + r.amount; });
-      const total = rows.reduce((a, c) => a + c.amount, 0);
+      const pending = rows.filter((r) => r.status === 'pending');
+      const active = verified.concat(pending);
+      const byType = {}; active.forEach((r) => { byType[r.type] = (byType[r.type] || 0) + r.amount; });
+      const total = active.reduce((a, c) => a + c.amount, 0);
       const vt = verified.reduce((a, c) => a + c.amount, 0);
       return `
       <div class="ai-strip">
         <div class="ai-ico">💰</div>
-        <div class="ai-txt"><b>收益核算口径（财务可核定版）：</b>仅计已发生且可追溯的直接损失（报废料、返工工时、停线损失、索赔）；单价取 @ERP 当期标准价；摊销期不超过 12 个月；同一损失不得重复计入。<br>
+        <div class="ai-txt"><b>收益核算口径（财务可核定版）：</b>仅计已发生且可追溯的直接损失（报废料、返工工时、停线损失、索赔）；单价由经办人按实际依据填写；摊销期不超过 12 个月；同一损失不得重复计入。<br>
           已核定 <b>¥${vt.toFixed(1)} 万</b>，待核定 <b>¥${(total - vt).toFixed(1)} 万</b>，核定通过率 <b>${rows.length ? (verified.length / rows.length * 100).toFixed(1) : '—'}%</b>。</div>
-        ${act('AI 收益测算', 'benefitCalc', {}, 'btn btn-ai')}
+        ${act('收益测算', 'benefitCalc', {}, 'btn btn-ai')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">
         ${kpi({ ico: '💰', label: '台账合计', value: '¥' + total.toFixed(1) + '<span style="font-size:14px;">万</span>', delta: rows.length + ' 笔', color: '#7a5af8', icoBg: '#f0ebff' })}
@@ -207,16 +195,15 @@
       </div>
       <div class="grid g2-1" style="margin-bottom:14px;">
         ${card('收益构成分析', '按类型', paretoChart(Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([name, value], i, arr) => { let c = 0; for (let j = 0; j <= i; j++) c += arr[j][1]; return { name, value: Number(value.toFixed(1)), cumPct: c / (total || 1) * 100 }; }), {}))}
-        ${card('人均年收益', '质量改进部门 16 人',
-          `<div style="text-align:center;padding:10px 0;"><div class="score-ring" style="font-size:34px;color:#7a5af8;">¥${(vt / 16).toFixed(1)}<span style="font-size:13px;color:#8791a5;">万/人</span></div>
-           <div style="font-size:11.5px;color:#8791a5;margin-top:6px;">按已核定收益 / 16 人测算</div></div>` +
-          infoGrid([['已核定总额', '¥' + vt.toFixed(1) + ' 万'], ['待核定', '¥' + (total - vt).toFixed(1) + ' 万'], ['台账笔数', rows.length], ['最快回收期项目', rows.slice().sort((a, b) => b.amount - a.amount)[0] ? rows.slice().sort((a, b) => b.amount - a.amount)[0].projectId : '—']]))}
+        ${card('核定概览', '按台账状态汇总',
+          infoGrid([['已核定总额', '¥' + vt.toFixed(1) + ' 万'], ['待核定', '¥' + (total - vt).toFixed(1) + ' 万'],
+            ['待核定笔数', pending.length], ['已驳回', rows.filter((r)=>r.status==='rejected').length]]))}
       </div>
       ${card('收益台账', '共 ' + rows.length + ' 笔 · 点击可提交财务核定',
         table(['单号', '关联项目', '类型', '金额（万元）', '期间', '状态', '核定人', ''],
           rows.map((b) => ({
-            cells: ['<b>' + esc(b.id) + '</b>', esc(b.projectId || '—') + (b.projectTitle ? '<br><span style="font-size:11px;color:#8791a5;">' + esc(b.projectTitle.slice(0, 22)) + '</span>' : ''), tag(b.type, 'blue'), '<b>' + b.amount + '</b>', esc(b.period || ''), b.status === 'verified' ? tag('财务已核定', 'green') : tag('待核定', 'orange'), esc(b.verifiedBy || '—'),
-              b.status === 'verified' ? '' : act('提交核定', 'submitBenefit', { id: b.id }, 'btn btn-sm')],
+            cells: ['<b>' + esc(b.id) + '</b>', esc(b.projectId || '—') + (b.projectTitle ? '<br><span style="font-size:11px;color:#8791a5;">' + esc(b.projectTitle.slice(0, 22)) + '</span>' : ''), tag(b.type, 'blue'), '<b>' + b.amount + '</b>', esc(b.period || ''), b.status === 'verified' ? tag('已核定', 'green') : b.status === 'rejected' ? tag('已驳回','gray') : tag('待核定', 'orange'), esc(b.verifiedBy || '—'),
+              b.status === 'pending' ? act('核定','submitBenefit',{id:b.id},'btn btn-sm') + ' ' + act('驳回','localDecision',{group:'benefits',id:b.id,decision:'reject'},'btn btn-sm') : esc(b.verificationNote || '')],
           }))),
         act('导出 Excel', 'exportData', { dataset: 'benefits' }))}
       <div class="footer-note">${brand()} · 收益核算</div>`;

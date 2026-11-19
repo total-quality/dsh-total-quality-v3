@@ -44,7 +44,7 @@
       return `
       ${configured ? '' : `<div class="ai-strip" style="background:linear-gradient(90deg,#fff5f4,#fff3e0);border-color:#ffdcd9;">
         <div class="ai-ico" style="background:linear-gradient(135deg,#c8620a,#e5484d);">⚠️</div>
-        <div class="ai-txt"><b>尚未接入大模型，智能体无法推理。</b>请点击右侧按钮填写 DeepSeek API Key（或厂内私有化 OpenAI 兼容地址）。配置后即可真实对话、真实调用 ${tools.length} 个工具。</div>
+        <div class="ai-txt"><b>当前没有可用模型。</b>请在 DeepSeek Harness 中配置模型，然后在本插件的系统设置里测试连通性。</div>
         ${act('立即配置模型', 'goto', { page: 'settings' }, 'btn btn-primary')}
       </div>`}
       <div class="ai-strip">
@@ -169,12 +169,12 @@
         ${act('＋ 发现问题', 'newIssue', {}, 'btn btn-ai')}
       </div>
       <div class="imp-hint">
-        <span class="big">📱 可以手机拍拍拍导入问题</span>
-        <span class="imp-sub">现场拿手机拍照片/拍视频，顺手说一句现象，AI 自动识别并录入；也支持直接导入 Excel / CSV 问题清单。</span>
+        <span class="big">📱 导入问题清单</span>
+        <span class="imp-sub">支持 Excel / CSV。问题进入本机台账后，可补充事实、指派责任人并开始处理。</span>
         ${act('导入问题（Excel / CSV）', 'importFile', { target: 'issues' }, 'btn btn-primary btn-sm')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">
-        ${kpi({ ico: '📋', label: '问题总数', value: rows.length, delta: '本月新增 ' + rows.filter((r) => (r.createdAt || '').slice(0, 7) === new Date().toISOString().slice(0, 7)).length, act: 'filterIssues', args: {} })}
+        ${kpi({ ico: '📋', label: '问题总数', value: rows.length, delta: '本月新增 ' + rows.filter((r) => (r.createdAt || '').slice(0, 7) === new Date().toISOString().slice(0, 7)).length, act: 'issueSev', args: { sev: 'all' } })}
         ${kpi({ ico: '🚨', label: '未关闭 A 级', value: open.filter((r) => r.severity === 'A').length, color: '#e5484d', icoBg: '#feece8', delta: '需 2h 响应 / 24h 围堵', deltaColor: '#e5484d' })}
         ${kpi({ ico: '🔄', label: '已关联改进项目', value: rows.filter((r) => r.projectId).length, color: '#7a5af8', icoBg: '#f0ebff', delta: '升级率 ' + ((rows.filter((r) => r.projectId).length / (rows.length || 1)) * 100).toFixed(1) + '%' })}
         ${kpi({ ico: '✅', label: '已关闭', value: rows.filter((r) => r.status === '已关闭').length, color: '#18a058', icoBg: '#e8f7ee', delta: '关闭率 ' + ((rows.filter((r) => r.status === '已关闭').length / (rows.length || 1)) * 100).toFixed(1) + '%' })}
@@ -239,13 +239,13 @@
     };
     const sevs = view.sev === 'all' ? ['A', 'B', 'C'] : [view.sev];
     const html = sevs.map((sev) => {
-      const list = rows.filter((r) => String(r.severity || '').toUpperCase() === sev);
+      const list = rows.filter((r) => (String(r.severity || '').toUpperCase() || 'C') === sev);
       const openCnt = list.filter((r) => r.status !== '已关闭').length;
       const body = list.length
         ? table(['编号', '产品', '车间/工位', '问题描述', '来源', '状态', '责任人', '关联项目'],
           list.map((r) => ({
             __act: 'issueDetail', __args: { id: r.id },
-            cells: ['<b>' + esc(r.id) + '</b>', esc(r.model), esc(r.workshop) + (r.station ? (r.station.indexOf(r.workshop) === 0 ? '·' + esc(r.station.slice(r.workshop.length).replace(/^[·\-\s]+/, '')) : '·' + esc(r.station)) : ''), esc(r.title), tag(r.source, r.source === 'AI 质检' ? 'purple' : r.source === 'MES' ? 'navy' : r.source === '市场' ? 'green' : 'gray'), statusTag(r.status), esc(r.owner || '—'), r.projectId ? tag(r.projectId, 'blue') : '—'],
+            cells: ['<b>' + esc(r.id) + '</b>', esc(r.model), esc(r.workshop) + (r.station ? (r.workshop && r.station.startsWith(r.workshop) ? '·' + esc(r.station.slice(r.workshop.length).replace(/^[·\-\s]+/, '')) : '·' + esc(r.station)) : ''), esc(r.title), tag(r.source, r.source === 'AI 质检' ? 'purple' : r.source === 'MES' ? 'navy' : r.source === '市场' ? 'green' : 'gray'), statusTag(r.status), esc(r.owner || '—'), r.projectId ? tag(r.projectId, 'blue') : '—'],
           })), { empty: '该等级暂无问题' })
         : empty('该等级暂无问题', '—');
       return `<details class="acc" ${view.open[sev] ? 'open' : ''}>

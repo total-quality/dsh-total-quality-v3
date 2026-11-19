@@ -24,20 +24,24 @@ function issueSim(query, issue) {
 }
 
 /* 知识库索引（懒构建 + 失效重建） */
-let kbIndex = null, kbIndexVersion = 0;
+let kbIndex = null, kbIndexVersion = '';
 function getKbIndex() {
   const docs = store.col('knowledge').all();
-  if (!kbIndex || kbIndexVersion !== docs.length) {
+  const version = JSON.stringify(docs.map((doc) => [
+    doc.id, doc.title, doc.tags, doc.problem, doc.cause, doc.action, doc.content, doc.category, doc.model,
+  ]));
+  if (!kbIndex || kbIndexVersion !== version) {
     kbIndex = retrieval.buildIndex(docs, [
       { field: 'title', weight: 3 },
       { field: 'tags', weight: 2.5 },
       { field: 'problem', weight: 1.5 },
       { field: 'cause', weight: 1.5 },
       { field: 'action', weight: 1.2 },
+      { field: 'content', weight: 1.2 },
       { field: 'category', weight: 2 },
       { field: 'model', weight: 1.5 },
     ]);
-    kbIndexVersion = docs.length;
+    kbIndexVersion = version;
   }
   return kbIndex;
 }
@@ -397,7 +401,7 @@ define({
       命中数: hits.length,
       结果: hits.map((h) => ({
         编号: h.doc.id, 类型: h.doc.type, 类别: h.doc.category, 标题: h.doc.title, 相关度: h.score,
-        问题: h.doc.problem, 原因: h.doc.cause, 对策: h.doc.action, 效果: h.doc.effect,
+        问题: h.doc.problem, 原因: h.doc.cause, 对策: h.doc.action, 效果: h.doc.effect, 正文: h.doc.content,
         标签: h.doc.tags, 出处: h.doc.source, 作者: h.doc.author,
       })),
       引用要求: '回答时必须注明出处编号（如 #C-0231）与来源，未标注出处的结论只能表述为「假设」。',
@@ -449,6 +453,19 @@ define({
 /* ================================================================== */
 /* QRQC                                                               */
 /* ================================================================== */
+function qrqcTask(args, fallback) {
+  const user = String(args.user || '').trim();
+  const title = String(args.title || '').trim();
+  const hours = Number(args.dueHours ?? fallback);
+  if (!user || !title || !Number.isFinite(hours) || hours <= 0 || hours > 720) throw new Error('派工须填写责任人、措施及 0–720 小时内的期限');
+  return { user, title, dueAt: new Date(Date.now() + hours * 3600000).toISOString(), done: false };
+}
+function addQrqcTodo(rec, task) {
+  const todo = store.col('todos').insert({ user: task.user, title: '[' + rec.id + '] ' + task.title,
+    priority: 'A', dueAt: task.dueAt, done: false, link: rec.id, source: 'QRQC ' + rec.id });
+  task.todoId = todo.id;
+}
+
 define({
   plugin: '本平台', name: 'qrqc_create', label: '发起 QRQC 快速响应',
   description: '创建 QRQC 记录（班组/车间/厂级），自动落「问题 / 临时措施 / 责任人 / 期限」四要素，并把任务派工到人。A 级问题 2 小时内必须响应。',
@@ -467,21 +484,27 @@ define({
   },
   write: true,
   run(args) {
-    const dueH = args.dueHours || 24;
-    const rec = store.col('qrqc').insert({
+    if (!String(args.topic || '').trim() || !String(args.problem || '').trim()) return { ok:false, error:'请填写议题与问题' };
+    const dueH = Number(args.dueHours ?? 24);
+    if (!Number.isFinite(dueH) || dueH <= 0 || dueH > 720) return { ok:false, error:'闭环期限须大于 0 且不超过 720 小时' };
+    if (args.tempAction && !args.owner) return { ok:false, error:'派发临时措施前请指定责任人' };
+    const requested = args.tasks?.length ? args.tasks : args.tempAction ? [{ user: args.owner, title: args.tempAction }] : [];
+    const tasks = requested.map((t) => qrqcTask(t, dueH));
+    const rec = store.transaction(() => {
+      const row = store.col('qrqc').insert({
       level: args.level || '车间', workshop: args.workshop || '', model: args.model || '', topic: args.topic,
       problem: args.problem, tempAction: args.tempAction || '', owner: args.owner || '待指派',
       attendees: args.attendees || [], dueHours: dueH, status: 'open', responseHours: 2,
-      createdAt: nowISO(), responseAt: nowISO(), location: (args.workshop || '') + ' QRQC 会议室', minutes: '',
-      tasks: (args.tasks || []).map((t) => ({ user: t.user, title: t.title, dueAt: new Date(Date.now() + (t.dueHours || dueH) * 3600000).toISOString(), done: false })),
+      createdAt: nowISO(), responseAt: null, location: args.workshop || '', minutes: '', tasks,
+      });
+      tasks.forEach((task) => addQrqcTodo(row, task));
+      return row;
     });
-    const tasks = rec.tasks;
-    tasks.forEach((t) => store.col(t.user ? 'todos' : 'todos').insert({ user: t.user || '待指派', title: '[' + rec.id + '] ' + t.title, priority: 'A', dueAt: t.dueAt, done: false, link: rec.id, source: 'QRQC ' + rec.id }));
     return {
       ok: true, QRQC编号: rec.id, 层级: rec.level, 状态: '已发起（2h 响应计时开始）',
       四要素: { 问题: rec.problem, 临时措施: rec.tempAction, 责任人: rec.owner, 期限: dueH + ' 小时（' + new Date(Date.now() + dueH * 3600000).toISOString().slice(0, 16) + '）' },
       已派工: tasks.map((t) => ({ 责任人: t.user, 任务: t.title, 期限: t.dueAt.slice(0, 16) })),
-      升级规则: rec.level === '班组' ? '2h 未闭环自动升级车间级' : rec.level === '车间' ? '24h 未闭环自动升级厂级并抄送科长' : '厂级问题日报跟踪',
+      提示: '在 QRQC 页面记录实际响应、完成任务并确认闭环。',
     };
   },
 });
@@ -501,17 +524,26 @@ define({
   write: true,
   run(args) {
     const items = args.items || [];
-    let rec = args.id ? store.col('qrqc').get(args.id) : null;
-    if (!rec) {
-      rec = store.col('qrqc').insert({ level: '车间', topic: args.topic || 'QRQC 会议', workshop: '', model: '', problem: '', attendees: args.attendees || [], status: 'open', tasks: [], dueHours: 24, responseHours: 2 });
+    const existing = args.id ? store.col('qrqc').get(args.id) : null;
+    if (args.id && !existing) return { ok: false, error: 'QRQC 记录不存在' };
+    if (existing?.status === 'closed') return { ok:false, error:'已闭环记录不能重新派工' };
+    if (!Array.isArray(items) || !items.length || items.some((item) => !item?.problem || !item.tempAction || !item.owner)) {
+      return { ok:false, error:'纪要须填写问题、临时措施和责任人' };
     }
-    const tasks = (rec.tasks || []).concat(items.map((it) => ({ user: it.owner, title: it.permanent ? '[永久对策] ' + it.problem : '[临时措施] ' + it.problem, dueAt: new Date(Date.now() + (it.dueHours || 24) * 3600000).toISOString(), done: false })));
-    store.col('qrqc').update(rec.id, {
-      topics: items.map((i) => i.problem), minutes: JSON.stringify({ items, raw: args.raw || '' }, null, 0),
-      attendees: args.attendees || rec.attendees, tasks, updatedAt: nowISO(),
+    const requested = items.map((item) => qrqcTask({ user:item.owner, title:item.permanent || item.tempAction, dueHours:item.dueHours }, existing?.dueHours || 24));
+    return store.transaction(() => {
+      const rec = existing || store.col('qrqc').insert({level:'车间',topic:args.topic || 'QRQC 会议',problem:items[0].problem,attendees:args.attendees || [],status:'open',tasks:[],dueHours:24,responseHours:2});
+      const tasks = rec.tasks || [];
+      let added = 0;
+      for (const task of requested) {
+        if (tasks.some((t) => t.user === task.user && t.title === task.title)) continue;
+        addQrqcTodo(rec, task);
+        tasks.push(task);
+        added++;
+      }
+      store.col('qrqc').update(rec.id,{ minutes: JSON.stringify({items,raw:args.raw || ''}), attendees:args.attendees || rec.attendees, tasks, updatedAt:nowISO() });
+      return { ok:true, QRQC编号:rec.id, 生成任务数:added, 已派工到:[...new Set(requested.map((t)=>t.user))] };
     });
-    tasks.forEach((t) => { if (!t.done) store.col('todos').insert({ user: t.user || '待指派', title: '[' + rec.id + '] ' + t.title, priority: 'A', dueAt: t.dueAt, done: false, link: rec.id, source: 'QRQC 纪要' }); });
-    return { ok: true, QRQC编号: rec.id, 纪要四要素: items.map((i) => ({ 问题: i.problem, 临时措施: i.tempAction, 责任人: i.owner, 期限: (i.dueHours || 24) + 'h' })), 生成任务数: tasks.length, 已派工到: [...new Set(tasks.map((t) => t.user))], 备注: '纪要已写入 QRQC 记录并自动派工到个人待办' };
   },
 });
 
@@ -575,11 +607,7 @@ define({
     if (args.dept) ms = ms.filter((m) => m.dept.indexOf(args.dept) >= 0);
     return {
       ok: true, 数据来源: '@OA 组织架构（本平台不另建账号体系）', 人数: ms.length,
-      组织: [
-        { 部门: '质量改进部门', 负责人: '陈伟（科长）', 人数: 16, 职责: '问题管理、8D 改进、SPC 分析、市场质量、知识沉淀' },
-        { 部门: '四车间 / 二车间 / 三车间', 职责: '现场执行与配合', 接口人: ['杨帆', '许强'] },
-        { 部门: '制造工程部', 职责: '工艺与工装支持', 接口人: ['彭勇'] },
-      ],
+      组织: [...new Set(ms.map((m) => m.dept).filter(Boolean))].map((dept) => ({ 部门: dept, 人数: ms.filter((m) => m.dept === dept).length })),
       人员: ms.map((m) => ({ 姓名: m.name, 角色: m.role, 部门: m.dept, 司龄: m.seniority, 专长: m.expert || [], 技能: m.skills })),
     };
   },
@@ -615,20 +643,22 @@ define({
         if (rows.length) { base = oos / rows.length; notes.push('改善前损失率由 @MES 实测数据计算：' + ch.id + ' 近 30 日超差 ' + oos + '/' + rows.length + ' = ' + (base * 100).toFixed(2) + '%'); }
       }
     }
-    if (base === undefined) base = 0.034;
-    const target = args.targetRate === undefined ? 0.005 : args.targetRate;
-    if (vol === undefined) vol = 120000; notes.push('年产量未提供，按本企业双班年产 12 万台估算（可在参数中覆盖）');
-    if (loss === undefined) loss = 180; notes.push('单件损失未提供，按四车间平均返修+报废 ¥180/台估算');
+    const target = args.targetRate;
+    const oneTime = args.oneTimeCost ?? 0;
+    const months = args.amortizeMonths ?? 12;
+    if (![base, target].every((n) => Number.isFinite(n) && n >= 0 && n <= 1)) return {ok:false,error:'请提供有效的改善前后损失率，或选择存在测量数据的特性'};
+    if (!Number.isSafeInteger(vol) || vol <= 0 || !Number.isFinite(loss) || loss < 0 || !Number.isFinite(oneTime) || oneTime < 0 || !Number.isInteger(months) || months < 1 || months > 12) {
+      return {ok:false,error:'请填写实际年产量和单位损失，摊销期须为 1–12 个月'};
+    }
     const savedUnits = (base - target) * vol;
     const annual = savedUnits * loss;
-    const oneTime = args.oneTimeCost || 0;
-    const months = args.amortizeMonths || 12;
+    if (!Number.isFinite(annual)) return {ok:false,error:'测算结果超出有效数值范围'};
     const payback = annual > 0 ? (oneTime / annual) * 12 : null;
     return {
       ok: true, 数据来源: '@FIN 财务核定口径（仅计直接损失）',
       输入: { 改善前损失率: (base * 100).toFixed(2) + '%', 改善后目标损失率: (target * 100).toFixed(2) + '%', 年产量: vol, 单件损失: loss + ' 元', 一次性投入: oneTime + ' 元', 摊销月数: months },
       测算过程: '减少损失件数 = (' + (base * 100).toFixed(2) + '% - ' + (target * 100).toFixed(2) + '%) × ' + vol + ' = ' + Math.round(savedUnits) + ' 件；年化收益 = ' + Math.round(savedUnits) + ' × ' + loss + ' = ' + Math.round(annual) + ' 元',
-      结果: { 年化收益元: Math.round(annual), 年化收益万元: Number((annual / 10000).toFixed(1)), 月度收益万元: Number((annual / 12 / 10000).toFixed(1)), 投资回收期月: payback === null ? null : Number(payback.toFixed(2)), 摊销期内收益万元: Number(((annual / 12) * months / 10000).toFixed(1)) },
+      结果: { 年化收益元: Math.round(annual), 年化收益万元: Number((annual / 10000).toFixed(4)), 月度收益万元: Number((annual / 12 / 10000).toFixed(1)), 投资回收期月: payback === null ? null : Number(payback.toFixed(2)), 摊销期内收益万元: Number(((annual / 12) * months / 10000).toFixed(1)) },
       财务口径说明: ['仅计直接损失：报废料、返工工时、停线损失、索赔', '单价用 ERP 当期标准价，工时用财务核定费率', '摊销期不超过 12 个月', '同一损失不得在两个项目中重复计入'],
       数据说明: notes,
       下一步: '可将本测算提交财务核定（调用 fin_submit_benefit），核定通过后计入收益台账',
@@ -638,7 +668,7 @@ define({
 
 define({
   plugin: '@FIN', name: 'fin_submit_benefit', label: '提交收益核定',
-  description: '把改进收益测算提交财务核定（AI 测算 → 财务核定双签闭环），写入收益台账。',
+  description: '把改进收益测算写入本地待核定台账，并生成一项人工核定待办。',
   parameters: {
     type: 'object',
     properties: {
@@ -649,22 +679,28 @@ define({
     required: ['amount'],
   },
   write: true,
-  run(args) {
+  run(args, ctx) {
+    if (!Number.isFinite(args.amount) || args.amount < 0) return {ok:false,error:'收益金额须为非负数'};
     const p = args.projectId ? store.col('projects').get(args.projectId) : null;
-    const rec = store.col('benefits').insert({
-      projectId: args.projectId || '', projectTitle: p ? p.title : (args.note || '专项改进'),
-      type: args.type || '报废降损', amount: args.amount, period: args.period || today().slice(0, 7),
-      status: 'pending', note: args.note || '', formula: args.formula || '收益 = (改善前损失率 - 改善后损失率) × 产量 × 单位损失',
-      verifiedBy: '', verifiedAt: null, aiDriven: true,
+    if (args.projectId && !p) return {ok:false,error:'关联项目不存在'};
+    if (args.period && !/^\d{4}-(0[1-9]|1[0-2])$/.test(args.period)) return {ok:false,error:'期间须填写为年-月'};
+    const rec = store.transaction(() => {
+      const record = store.col('benefits').insert({
+        projectId: p?.id || '', projectTitle: p ? p.title : (args.note || '专项改进'),
+        type: args.type || '报废降损', amount: args.amount, period: args.period || today().slice(0, 7),
+        status: 'pending', note: args.note || '', formula: args.formula || '收益 = (改善前损失率 - 改善后损失率) × 产量 × 单位损失',
+        verifiedBy: '', verifiedAt: null, aiDriven: Boolean(ctx?.sessionId),
+      });
+      store.col('todos').insert({ user: '财务', title: '收益核定：' + record.id + ' ' + record.projectTitle, priority: 'B', dueAt: new Date(Date.now() + 3 * 86400000).toISOString(), done: false, link: record.id, source: '@FIN 收益核定' });
+      return record;
     });
-    store.col('todos').insert({ user: '财务共享中心', title: '收益核定：' + rec.id + ' ' + rec.projectTitle, priority: 'B', dueAt: new Date(Date.now() + 3 * 86400000).toISOString(), done: false, link: rec.id, source: '@FIN 收益核定' });
     return { ok: true, 收益单号: rec.id, 金额: rec.amount + ' 万元', 状态: '已提交财务核定（待核定）', 关联项目: rec.projectId || '无', 提示: '财务核定通过后状态变为 verified，方可在驾驶舱「年度改进收益」中体现' };
   },
 });
 
 define({
   plugin: '@FIN', name: 'fin_benefit_ledger', label: '收益台账查询',
-  description: '查询改进收益台账：按类型/期间/状态汇总，返回核定通过率、AI 促成占比与合计金额。',
+  description: '查询本地改进收益台账，按类型、期间和核定状态汇总。',
   parameters: { type: 'object', properties: { period: { type: 'string' }, status: { type: 'string' }, projectId: { type: 'string' } } },
   run(args) {
     let rows = store.col('benefits').all().slice();
@@ -672,17 +708,20 @@ define({
     if (args.status) rows = rows.filter((r) => r.status === args.status);
     if (args.projectId) rows = rows.filter((r) => r.projectId === args.projectId);
     const verified = rows.filter((r) => r.status === 'verified');
-    const byType = {};
-    rows.forEach((r) => { byType[r.type] = (byType[r.type] || 0) + r.amount; });
+    const active = rows.filter((r) => r.status === 'pending' || r.status === 'verified');
+    const considered = rows.filter((r) => r.status === 'verified' || r.status === 'rejected');
+    const sum = (list) => Number(list.reduce((total, row) => total + Number(row.amount || 0), 0).toFixed(2));
+    const byType = Object.create(null);
+    active.forEach((r) => { byType[r.type] = (byType[r.type] || 0) + Number(r.amount || 0); });
     return {
-      ok: true, 数据来源: '改进收益台账（AI 测算 + 财务核定双签）',
-      笔数: rows.length, 合计万元: Number(rows.reduce((a, c) => a + c.amount, 0).toFixed(1)),
-      已核定万元: Number(verified.reduce((a, c) => a + c.amount, 0).toFixed(1)),
-      待核定万元: Number(rows.filter((r) => r.status === 'pending').reduce((a, c) => a + c.amount, 0).toFixed(1)),
-      核定通过率: rows.length ? Number(((verified.length / rows.length) * 100).toFixed(1)) + '%' : '—',
-      AI促成占比: rows.length ? Number(((rows.filter((r) => r.aiDriven).length / rows.length) * 100).toFixed(1)) + '%' : '—',
+      ok: true, 数据来源: '本地改进收益台账',
+      笔数: rows.length, 合计万元: sum(active),
+      已核定万元: sum(verified),
+      待核定万元: sum(rows.filter((r) => r.status === 'pending')),
+      已驳回笔数: considered.length - verified.length,
+      核定通过率: considered.length ? Number(((verified.length / considered.length) * 100).toFixed(1)) + '%' : '—',
       按类型万元: byType,
-      明细: rows.map((r) => ({ 单号: r.id, 项目: r.projectId, 类型: r.type, 金额万元: r.amount, 期间: r.period, 状态: r.status === 'verified' ? '财务已核定' : '待核定', 核定人: r.verifiedBy || '—' })),
+      明细: rows.map((r) => ({ 单号: r.id, 项目: r.projectId, 类型: r.type, 金额万元: r.amount, 期间: r.period, 状态: ({verified:'已核定',pending:'待核定',rejected:'已驳回'})[r.status] || r.status, 核定人: r.verifiedBy || '—' })),
     };
   },
 });
@@ -736,8 +775,8 @@ define({
 });
 
 define({
-  plugin: '@FIN', name: 'quality_cost_calc', label: '质量成本（COPQ）计算',
-  description: '按 PAF 模型计算质量成本：预防、鉴定、内部失败、外部失败四项及其占比、质量成本率，并给出改进优先级建议。',
+  plugin: '@FIN', name: 'quality_cost_calc', label: '质量成本（PAF）计算',
+  description: '按用户提供的同一期间实际成本计算 PAF 四项构成及两项失败成本。提供销售收入时计算质量成本率。',
   parameters: {
     type: 'object',
     properties: {
@@ -746,30 +785,24 @@ define({
       internalFailure: { type: 'number', description: '内部失败成本（万元）' },
       externalFailure: { type: 'number', description: '外部失败成本（万元）' },
       salesRevenue: { type: 'number', description: '销售收入（万元），用于计算质量成本率' },
-      autoFromData: { type: 'boolean', description: '是否用平台数据自动估算失败成本' },
     },
+    required: ['prevention', 'appraisal', 'internalFailure', 'externalFailure'],
   },
   run(args) {
-    let p = args.prevention, a = args.appraisal, i = args.internalFailure, e = args.externalFailure;
-    const notes = [];
-    if (args.autoFromData || i === undefined) {
-      const ledger = store.col('benefits').all();
-      const projLoss = store.col('projects').all().reduce((s, x) => s + (x.benefitEstimate || 0), 0);
-      i = i === undefined ? 421 : i;
-      e = e === undefined ? 253 : e;
-      notes.push('内部/外部失败成本未提供，按质量部年度损失台账口径填充（报废降损 421 万 / 索赔挽回 253 万）');
+    const { prevention:p, appraisal:a, internalFailure:i, externalFailure:e, salesRevenue:sales } = args;
+    if (![p, a, i, e].every((value) => Number.isFinite(value) && value >= 0)) {
+      return { ok: false, error: '请填写同一期间四项实际成本。无发生额的项目请填写 0。' };
     }
-    p = p === undefined ? 186 : p; a = a === undefined ? 242 : a;
-    const sales = args.salesRevenue === undefined ? 486000 : args.salesRevenue;
+    if (sales !== undefined && (!Number.isFinite(sales) || sales <= 0)) return { ok:false, error:'销售收入须大于 0' };
     const total = p + a + i + e;
+    const percentage = (value, denominator, digits = 1) => denominator ? (value / denominator * 100).toFixed(digits) + '%' : '—';
     return {
-      ok: true, 数据来源: '财务共享中心 + 质量部损失台账',
+      ok: true, 数据来源: '用户填报的同一期间成本及销售收入',
       构成万元: { 预防成本: p, 鉴定成本: a, 内部失败成本: i, 外部失败成本: e, 合计: total },
-      占比: { 预防: ((p / total) * 100).toFixed(1) + '%', 鉴定: ((a / total) * 100).toFixed(1) + '%', 内部失败: ((i / total) * 100).toFixed(1) + '%', 外部失败: ((e / total) * 100).toFixed(1) + '%' },
-      质量成本率: ((total / sales) * 100).toFixed(2) + '%',
-      行业对标: '整车厂优秀水平 1.2%~1.8%，标杆 <2%。当前 ' + ((total / sales) * 100).toFixed(2) + '% ' + (((total / sales) * 100) < 1.8 ? '优于对标' : '高于对标，需加强预防投入'),
-      改进建议: (i + e) > (p + a) ? '失败成本(' + (i + e) + ' 万)显著高于预防+鉴定(' + (p + a) + ' 万)，说明处于"事后救火"模式：建议将预防投入提升 20%~30%（FMEA/SPC/防错），可撬动失败成本下降。' : '预防投入比例合理，建议维持并聚焦高 RPN 项目。',
-      数据说明: notes,
+      占比: { 预防: percentage(p,total), 鉴定: percentage(a,total), 内部失败: percentage(i,total), 外部失败: percentage(e,total) },
+      质量成本率: percentage(total,sales,2),
+      不良质量成本万元: i + e,
+      数据说明: sales === undefined ? '补充同一期间销售收入后可计算质量成本率。' : '质量成本率按四项成本合计除以销售收入计算。',
     };
   },
 });
@@ -788,22 +821,29 @@ define({
     required: ['factors'],
   },
   run(args) {
-    const f = args.factors || [];
+    const f = Array.isArray(args.factors) ? args.factors : [];
     const k = f.length;
+    const design = args.design || 'full';
     if (k < 2) return { ok: false, error: '至少需要 2 个因子' };
-    if (k > 7 && args.design !== 'pb') return { ok: false, error: '全因子/部分因子建议因子数 ≤7（否则试验次数过多），请用 pb 筛选设计' };
-    const reps = args.replicates || 2;
-    let runs = [];
-    if (args.design === 'pb' || k > 4) {
-      // Plackett-Burman：用 Hadamard 构造（k<=7 时取 8 次运行）
-      const n = k <= 7 ? 8 : 12;
-      const base = k <= 7 ? [1, 1, 1, -1, 1, -1, -1] : [1, 1, -1, 1, 1, 1, -1, -1, -1, 1, -1];
-      for (let r = 0; r < n; r++) {
-        const row = [];
-        for (let c = 0; c < k; c++) row.push(base[(r + c) % base.length]);
-        runs.push(row);
+    if (!['full', 'frac', 'pb'].includes(design)) return { ok:false, error:'请选择有效的设计类型' };
+    if ((design === 'pb' && k > 11) || (design !== 'pb' && k > 7)) return { ok:false, error:'全因子和部分因子支持 7 个因子，筛选设计最多支持 11 个' };
+    if (design === 'frac' && k < 3) return { ok:false, error:'部分因子设计至少需要 3 个因子' };
+    const reps = args.replicates ?? 2;
+    if (!Number.isInteger(reps) || reps < 1 || reps > 20) return { ok:false, error:'重复次数须为 1–20 的整数' };
+    const response = String(args.response || '响应值').trim() || '响应值';
+    const fields = ['运行号', '重复', '_code', '__proto__', 'prototype', 'constructor'];
+    const names = f.map((factor) => String(factor?.name || '').trim());
+    if (names.some((name) => !name || fields.includes(name) || name === response) ||
+        fields.includes(response) || new Set(names).size !== k) return { ok:false, error:'因子名称必须唯一，并与响应和系统列名不同' };
+    if (f.some((factor) => String(factor.low ?? '-1') === String(factor.high ?? '+1'))) return { ok:false, error:'每个因子的高低水平必须不同' };
+    const runs = [];
+    if (design === 'pb') {
+      const base = k <= 7 ? [-1, 1, 1, -1, 1, -1, -1] : [-1, 1, -1, 1, 1, 1, -1, -1, -1, 1, -1];
+      for (let r = 0; r < base.length; r++) {
+        runs.push(Array.from({ length:k }, (_, c) => base[(r + c) % base.length]));
       }
-    } else if (args.design === 'frac' && k >= 4) {
+      runs.push(Array(k).fill(1));
+    } else if (design === 'frac') {
       // 2^(k-1) 部分因子，生成元 I = ABCD...
       const n = 1 << (k - 1);
       for (let r = 0; r < n; r++) {
@@ -821,25 +861,23 @@ define({
     runs.forEach((row, ri) => {
       for (let rep = 1; rep <= reps; rep++) {
         const rec = { 运行号: ri + 1, 重复: rep };
-        f.forEach((fac, ci) => { rec[fac.name] = row[ci] > 0 ? (fac.high === undefined ? '+1' : fac.high) : (fac.low === undefined ? '-1' : fac.low); });
+        f.forEach((fac, ci) => { rec[names[ci]] = row[ci] > 0 ? (fac.high ?? '+1') : (fac.low ?? '-1'); });
         rec._code = row.join(',');
-        rec[args.response || '响应值'] = '';
+        rec[response] = '';
         matrix.push(rec);
       }
     });
     return {
-      ok: true, 设计类型: args.design === 'pb' || k > 4 ? 'Plackett-Burman 筛选设计' : args.design === 'frac' ? '部分因子设计 2^(' + k + '-1)' : '全因子设计 2^' + k,
+      ok: true, 设计类型: design === 'pb' ? 'Plackett-Burman 筛选设计' : design === 'frac' ? '部分因子设计 2^(' + k + '-1)' : '全因子设计 2^' + k,
       因子数: k, 基础运行次数: runs.length, 重复次数: reps, 总试验次数: matrix.length,
-      因子表: f.map((x, i) => ({ 编号: String.fromCharCode(65 + i), 因子: x.name, 低水平: x.low, 高水平: x.high })),
+      因子表: f.map((x, i) => ({ 编号: String.fromCharCode(65 + i), 因子: names[i], 低水平: x.low ?? '-1', 高水平: x.high ?? '+1' })),
       试验矩阵: matrix,
       实施建议: [
         '①先做筛选试验（本设计）识别显著因子，再对显著因子做响应曲面优化',
         '②随机化运行顺序，避免时间趋势干扰（试验顺序请打乱后执行）',
-        '③每个运行至少 ' + reps + ' 次重复以估计纯误差',
-        '④整车厂建议利用夜班低产量时段实施，单次 DOE 控制在 30 台以内',
-        '⑤分析时用 stat_hypothesis_test 的 anova 或 stat_regression 做显著性判定',
+        reps > 1 ? '③相同条件的各次重复应独立执行，以估计纯误差。' : '③本设计没有独立重复，不能据此直接估计纯误差。',
+        design === 'full' ? '④分析时保留设计因素及与工程问题相关的交互作用。' : '④筛选结果需用后续试验验证，因子效应可能与交互作用混杂。',
       ],
-      样本量提示: '总试验 ' + matrix.length + ' 次' + (matrix.length > 30 ? '，超出建议范围，可减少重复次数或改用部分因子' : '，在整车厂可实施范围内'),
     };
   },
 });
@@ -859,44 +897,68 @@ define({
     let tasks = args.tasks;
     if (!tasks && args.projectId) {
       const p = store.col('projects').get(args.projectId);
+      if (!p) return { ok:false, error:'关联项目不存在' };
       const sla = { D1: 1, D2: 1, D3: 2, D4: 10, D5: 15, D6: 30, D7: 15, D8: 2 };
       const names = { D1: '组建团队', D2: '描述问题(5W2H)', D3: '临时措施/围堵', D4: '根因分析', D5: '永久对策+OA审批', D6: '实施验证', D7: '预防横展', D8: '关闭表彰归档' };
       tasks = Object.keys(sla).map((k, i, arr) => ({ name: k + ' ' + names[k], duration: sla[k], deps: i ? [arr[i - 1] + ' ' + names[arr[i - 1]]] : [], owner: p ? p.owner : '' }));
     }
-    if (!tasks || !tasks.length) return { ok: false, error: '需提供 tasks 或 projectId' };
-    const start = args.startDate ? new Date(args.startDate + 'T00:00:00+08:00') : new Date();
-    const finish = {};
-    const rows = [];
-    const dayMs = 86400000;
-    function early(t) {
-      if (finish[t.name]) return finish[t.name];
-      let s = start.getTime();
-      (t.deps || []).forEach((d) => { const dep = tasks.find((x) => x.name === d); if (dep) s = Math.max(s, early(dep)); });
-      const e = s + (t.duration || 1) * dayMs;
-      finish[t.name] = e;
-      return e;
+    if (!Array.isArray(tasks) || !tasks.length || tasks.length > 250) return { ok:false, error:'请提供 1–250 项任务，或选择一个项目' };
+    const startDate = args.startDate || today();
+    const start = Date.parse(startDate + 'T00:00:00Z');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !Number.isFinite(start) || new Date(start).toISOString().slice(0,10) !== startDate) {
+      return { ok:false, error:'请填写有效的开始日期，格式为 YYYY-MM-DD' };
     }
-    tasks.forEach((t) => early(t));
-    let cursor = start.getTime();
-    tasks.forEach((t) => {
-      let s = start.getTime();
-      (t.deps || []).forEach((d) => { const dep = tasks.find((x) => x.name === d); if (dep) s = Math.max(s, finish[dep.name]); });
-      rows.push({ 任务: t.name, 责任人: t.owner || '—', 工期天: t.duration || 1, 开始: new Date(s).toISOString().slice(0, 10), 结束: new Date(s + (t.duration || 1) * dayMs - dayMs).toISOString().slice(0, 10), 依赖: (t.deps || []).join('、') || '无', 关键路径: !!t.critical });
-    });
-    const projectEnd = Math.max(...rows.map((r) => Date.parse(r.结束 + 'T00:00:00+08:00')));
+    const plan = new Map();
+    for (const task of tasks) {
+      const name = String(task?.name || '').trim();
+      const duration = task?.duration ?? 1;
+      if (!name || plan.has(name) || !Number.isInteger(duration) || duration < 1 || duration > 3650 || (task.deps != null && !Array.isArray(task.deps))) {
+        return { ok:false, error:'任务名称须唯一，工期须为 1–3650 天的整数，依赖须为任务名称列表' };
+      }
+      plan.set(name, { ...task, name, duration, deps:[...new Set(task.deps || [])], successors:[] });
+    }
+    for (const task of plan.values()) {
+      for (const dependency of task.deps) {
+        if (!plan.has(dependency)) return { ok:false, error:task.name + ' 引用了不存在的依赖：' + dependency };
+        plan.get(dependency).successors.push(task);
+      }
+    }
+    const sequence = [];
+    const visiting = new Set();
+    function schedule(task) {
+      if (task.finish !== undefined) return;
+      if (visiting.has(task)) throw new Error('任务之间存在循环依赖：' + task.name);
+      visiting.add(task);
+      const dependencies = task.deps.map((name) => plan.get(name));
+      dependencies.forEach(schedule);
+      task.start = Math.max(0, ...dependencies.map((item) => item.finish));
+      task.finish = task.start + task.duration;
+      visiting.delete(task);
+      sequence.push(task);
+    }
+    try { plan.forEach(schedule); } catch (error) { return { ok:false, error:error.message }; }
+    const projectEnd = Math.max(...sequence.map((task) => task.finish));
+    for (const task of sequence.reverse()) {
+      task.latestStart = Math.min(projectEnd, ...task.successors.map((item) => item.latestStart)) - task.duration;
+    }
+    const dayMs = 86400000;
+    const dateAt = (day) => new Date(start + day * dayMs).toISOString().slice(0,10);
     return {
-      ok: true, 项目周期: rows.length ? Math.round((projectEnd - start.getTime()) / dayMs) + 1 + ' 天' : '—',
-      开始: start.toISOString().slice(0, 10), 计划完成: new Date(projectEnd).toISOString().slice(0, 10),
-      甘特表: rows,
-      里程碑: rows.filter((r) => (r.依赖 || '').indexOf('、') < 0 && r !== rows[0]).map((r) => r.任务) || [],
-      提示: '关键链上任一任务延期将导致项目整体延期，建议对关键路径任务设置每日跟踪。',
+      ok:true, 项目周期:projectEnd + ' 天', 开始:startDate, 计划完成:dateAt(projectEnd - 1),
+      甘特表: [...plan.values()].map((task) => ({
+        任务:task.name, 责任人:task.owner || '—', 工期天:task.duration,
+        开始:dateAt(task.start), 结束:dateAt(task.finish - 1), 依赖:task.deps.join('、') || '无',
+        总时差天:task.latestStart - task.start, 关键路径:task.latestStart === task.start,
+      })),
+      里程碑: [...plan.values()].filter((task) => !task.successors.length).map((task) => task.name),
+      提示:'按自然日和完成后开始的依赖排程，零总时差任务位于关键路径。',
     };
   },
 });
 
 define({
   plugin: '本平台', name: 'fmea_analyze', label: 'FMEA 风险分析',
-  description: '按 AIAG-VDA 规则计算 FMEA 的 S/O/D、AP（措施优先级）与 RPN，并按风险排序输出改进优先级清单。S≥9 一律判为高优先级。',
+  description: '校验人工填报的 S/O/D 并计算 RPN。行动优先级 AP 仅使用团队根据适用 AIAG & VDA 表核对的输入，可留待核对。',
   parameters: {
     type: 'object',
     properties: {
@@ -906,24 +968,27 @@ define({
     required: ['items'],
   },
   run(args) {
-    const judged = args.items.map((it) => {
-      const s = Number(it.s || 5), o = Number(it.o || 5), d = Number(it.d || 5);
+    const items = Array.isArray(args.items) ? args.items : [];
+    if (!items.length) return { ok:false, error:'请至少填写一项失效模式' };
+    const apOrder = { H:3, M:2, L:1 };
+    const judged = [];
+    for (const [index, it] of items.entries()) {
+      const [s, o, d] = [it?.s, it?.o, it?.d].map(Number);
+      if (typeof it?.failureMode !== 'string' || !it.failureMode.trim() || ![s,o,d].every((rating) => Number.isInteger(rating) && rating >= 1 && rating <= 10)) {
+        return { ok:false, error:'第 ' + (index + 1) + ' 项须填写失效模式及 1–10 的整数 S/O/D' };
+      }
+      const ap = String(it.ap || '').toUpperCase();
+      if (ap && !Object.hasOwn(apOrder, ap)) return { ok:false, error:'行动优先级须为 H、M、L 或留空待核对' };
       const rpn = s * o * d;
-      // AIAG-VDA AP 规则（简化版，覆盖主要判定路径）
-      let ap;
-      if (s >= 9 && o >= 2) ap = 'H';
-      else if (s >= 9) ap = 'M';
-      else if (rpn >= 200 || (s >= 7 && o >= 4) || (s >= 5 && o >= 7)) ap = 'H';
-      else if (rpn >= 100 || (s >= 7 && o >= 2) || (o >= 5 && d >= 5)) ap = 'M';
-      else ap = 'L';
-      return { 失效模式: it.failureMode, 失效影响: it.effect, 失效原因: it.cause, S: s, O: o, D: d, RPN: rpn, AP: ap, 现行控制: it.currentControl || '—', 建议措施: it.recommendedAction || '', 措施优先级: ap === 'H' ? '高：必须采取措施或说明不采取措施的理由' : ap === 'M' ? '中：宜采取措施' : '低：可接受，保持监控' };
-    }).sort((a, b) => (b.AP === a.AP ? (b.S === a.S ? b.RPN - a.RPN : b.S - a.S) : b.AP.localeCompare(a.AP)));
+      judged.push({ 失效模式:it.failureMode, 失效影响:it.effect, 失效原因:it.cause, S:s, O:o, D:d, RPN:rpn, AP:ap || '待核对', 现行控制:it.currentControl || '—', 建议措施:it.recommendedAction || '' });
+    }
+    judged.sort((a,b) => (apOrder[b.AP] || 0) - (apOrder[a.AP] || 0) || b.S - a.S || b.RPN - a.RPN);
     return {
       ok: true, 分析对象: args.process || '未指定', 条目数: judged.length,
       高风险项: judged.filter((x) => x.AP === 'H').length, 中风险项: judged.filter((x) => x.AP === 'M').length,
-      AP: { H: judged.filter((x) => x.AP === 'H').length, M: judged.filter((x) => x.AP === 'M').length, L: judged.filter((x) => x.AP === 'L').length },
+      AP: { H: judged.filter((x) => x.AP === 'H').length, M: judged.filter((x) => x.AP === 'M').length, L: judged.filter((x) => x.AP === 'L').length, 待核对:judged.filter((x) => x.AP === '待核对').length },
       明细: judged,
-      打分规范提示: ['S 必须对照 AIAG-VDA 表逐条判定，涉及安全/法规一律 S≥9', 'O 应用近 12 个月实际 ppm 反推，避免主观', 'D 必须有探测方法与探测时机；无在线防错时 D 不得低于 5', 'RPN 仅作参考，AIAG-VDA 以 AP 为准'],
+      打分规范提示: 'S、O、D 与 AP 由团队按适用评价表核对。RPN = S × O × D。',
     };
   },
 });

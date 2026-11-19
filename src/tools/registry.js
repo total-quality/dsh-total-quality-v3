@@ -33,6 +33,13 @@ define._warned = new Set();
 function all() { return [...registry.values()]; }
 function get(name) { return registry.get(name) || null; }
 
+function assistantFilter(settings) {
+  const disabled = new Set(Object.values(settings?.plugins || {})
+    .filter((plugin) => plugin?.enabled === false)
+    .map((plugin) => String(plugin.name || '').trim().split(/\s+/)[0]));
+  return (tool) => !disabled.has(tool.plugin);
+}
+
 /** 转成 OpenAI tools 参数（按开关过滤插件） */
 function schemas(pluginFilter, confirmActions) {
   return all()
@@ -54,4 +61,4 @@ function needsConfirm(name, confirmList) {
   return !!t.confirm || (Array.isArray(confirmList) && confirmList.indexOf(name) >= 0);
 }
 
-module.exports = { define, all, get, schemas, needsConfirm, registry };
+module.exports = { define, all, get, assistantFilter, schemas, needsConfirm, registry };

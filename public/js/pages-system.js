@@ -19,7 +19,7 @@
       return `
       <div class="ai-strip">
         <div class="ai-ico">✅</div>
-        <div class="ai-txt"><b>审批与派工：</b>平台通过 @OA 推送待办与审批流（权限继承 OA 组织架构，不另建账号）。对外承诺类动作由智能体挂起为「待确认项」，人工确认后才真正执行。当前待审批 <b>${pending.length}</b> 单，未完成待办 <b>${openTodos.length}</b> 项。</div>
+        <div class="ai-txt"><b>审批与派工：</b>审批和待办在本机留档。质量工作单需要到对应工作单处理。对外承诺类动作由智能体挂起为「待确认项」，人工确认后才真正执行。当前待审批 <b>${pending.length}</b> 单，未完成待办 <b>${openTodos.length}</b> 项。</div>
         ${act('＋ 发起审批', 'newWorkflow', {}, 'btn btn-ai')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">
@@ -32,46 +32,43 @@
         table(['单号', '类型', '标题', '申请人', '关联', '状态', '审批人', '提交时间', ''],
           wfs.map((w) => ({
             cells: ['<b>' + esc(w.id) + '</b>' + (w.urgent ? ' ' + tag('加急', 'red') : ''), tag(w.type, 'blue'), esc(w.title), esc(w.applicant), esc(w.relatedId || '—'),
-              w.status === 'pending' ? tag('待审批', 'orange') : w.status === 'approved' ? tag('已批准', 'green') : tag(w.status, 'gray'),
-              (w.approvers || []).map((a) => esc(a.name) + (a.status === 'approved' ? tag('已批', 'green') : tag('待批', 'gray'))).join(' '), dt(w.createdAt),
-              w.status === 'pending' ? act('批准', 'approveWf', { id: w.id }, 'btn btn-sm btn-primary') + act('驳回', 'rejectWf', { id: w.id }, 'btn btn-sm') : act('详情', 'wfDetail', { id: w.id }, 'btn btn-sm')],
+              w.status === 'pending' ? tag('待审批', 'orange') : w.status === 'approved' ? tag('已批准', 'green') : tag(w.status === 'rejected' ? '已驳回' : w.status, 'gray'),
+              (w.approvers || []).map((a) => esc(a.name) + (a.status === 'approved' ? tag('已批', 'green') : tag(a.status === 'rejected' ? '已驳回' : '待批', 'gray'))).join(' '), dt(w.createdAt),
+              w.operationsId ? act('查看工作单', 'openOperation', { id: w.operationsId }, 'btn btn-sm') : w.status === 'pending' ? act('批准', 'approveWf', { id: w.id }, 'btn btn-sm btn-primary') + act('驳回', 'rejectWf', { id: w.id }, 'btn btn-sm') : act('详情', 'wfDetail', { id: w.id }, 'btn btn-sm')],
           })), { empty: '暂无审批单' }))}
       ${card('待办清单', '共 ' + openTodos.length + ' 项未完成',
         table(['级别', '事项', '责任人', '来源', '期限', ''],
           openTodos.map((t) => ({
-            cells: [tag(t.priority, t.priority === 'A' ? 'red' : t.priority === 'B' ? 'orange' : 'gray'), '<b>' + esc(t.title) + '</b>', esc(t.user || ''), esc(t.source || ''), dt(t.dueAt), act('完成', 'todoDone', { id: t.id }, 'btn btn-sm')],
+            cells: [tag(t.priority, t.priority === 'A' ? 'red' : t.priority === 'B' ? 'orange' : 'gray'), '<b>' + esc(t.title) + '</b>', esc(t.user || ''), esc(t.source || ''), dt(t.dueAt),
+              t.operationsId ? act('打开工作单', 'openOperation', { id:t.operationsId }, 'btn btn-sm')
+              : wfs.some((w) => w.id === t.link) ? act('查看审批', 'wfDetail', { id:t.link }, 'btn btn-sm')
+              : t.source === '@FIN 收益核定' ? act('打开收益台账', 'goto', { page:'benefit' }, 'btn btn-sm')
+              : act('完成', 'todoDone', { id: t.id }, 'btn btn-sm')],
           })), { empty: '暂无待办' }))}
       <div class="footer-note">${brand()} · 审批中心</div>`;
     },
   };
 
   /* ================= 系统设置 ================= */
-  const PRESETS = {
-    deepseek: { label: 'DeepSeek 官方 API', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', reasonerModel: 'deepseek-reasoner', note: '在 platform.deepseek.com 创建 API Key。按量计费。' },
-    onprem: { label: '厂内私有化部署（vLLM / TGI）', baseUrl: 'http://10.0.0.100:8000/v1', model: 'deepseek-r1-32b', reasonerModel: 'deepseek-r1-32b', note: '数据不出厂。需填写自建 OpenAI 兼容端点，末尾一般带 /v1。' },
-    ollama: { label: '本机 Ollama（离线）', baseUrl: 'http://127.0.0.1:11434/v1', model: 'deepseek-r1:14b', reasonerModel: 'deepseek-r1:14b', note: '需先安装 Ollama 并 pull 模型；可留空 API Key。' },
-    gateway: { label: '企业网关 / 中转', baseUrl: 'https://your-gateway.example.com/v1', model: 'deepseek-chat', reasonerModel: 'deepseek-reasoner', note: '适用于公司统一网关（注意其是否允许浏览器/本机直连）。' },
-  };
-
   Pages.settings = {
     title: '系统设置', sub: '模型接入 · 智能体护栏 · 插件总线 · 数据管理',
     async render() {
       const boot = global.State.bootstrap;
       const s = boot.settings || {};
-      const llm = s.llm || {}, agent = s.agent || {}, plugins = s.plugins || {}, org = s.org || {}, push = s.push || {};
+      const llm = s.llm || {}, agent = s.agent || {}, plugins = s.plugins || {};
       const counts = boot.counts || {};
       let dbStatus = null;
       try { dbStatus = (await API.get('/qip-real-v3/api/system/db')).db || null; } catch (_) { dbStatus = null; }
       return `
       <div class="ai-strip">
         <div class="ai-ico">⚙️</div>
-        <div class="ai-txt"><b>配置说明：</b>插件内的 AI 对话直接调用 <b>DeepSeek Harness 当前登录的真实 DeepSeek 模型</b>（ctx.llm 服务，默认锁定最新的 DeepSeek-V4.1-Flash），不在本平台另存任何 API Key；所有业务数据写入本机 SQLite 数据库，不上传任何第三方。</div>
+        <div class="ai-txt"><b>配置说明：</b>插件内的 AI 对话直接调用 <b>DeepSeek Harness 当前登录的真实 DeepSeek 模型</b>（ctx.llm 服务，默认锁定最新的 DeepSeek-V4.1-Flash），不在本平台另存任何 API Key；业务数据保存在本机 SQLite。问答和起草会把必要的上下文发送给 Harness 配置的模型。</div>
         ${act('测试连通性', 'testLlm', {}, 'btn btn-ai')}
       </div>
 
       ${card('① 模型接入（真实 DeepSeek · 由 Harness 提供）', llm.hasApiKey ? tag('已连接真实模型', 'green') : tag('Harness 未接入模型', 'red'),
         `<div class="form-row"><div class="fl">当前模型<small>插件默认锁定 DeepSeek-V4.1-Flash；不可用时自动回落 Harness 当前模型，也可用环境变量 QIP_LLM_MODEL 覆盖</small></div><div class="fc"><b>${esc(llm.modelLabel || '未连接')}</b></div></div>
-        <div class="form-row"><div class="fl">调用链路<small>真实模型调用，不是预设话术</small></div><div class="fc"><code>页面 → 插件 Host 半 → ctx.llm → ${esc(llm.provider || 'DeepSeek')} / ${esc(llm.model || '')}</code></div></div>
+        <div class="form-row"><div class="fl">调用链路<small>真实模型调用，不是预设话术</small></div><div class="fc"><code>页面 → 插件 Host → ctx.llm → ${esc(llm.provider || 'DeepSeek')} / ${esc(llm.model || '')}</code></div></div>
         <div class="form-row"><div class="fl">说明</div><div class="fc" style="color:#5e6b85;line-height:1.9;">${esc(llm.description || '')}<br>本插件不需要单独填写 API Key 或 Base URL：模型接入、密钥与账号统一由 Harness 管理，插件只负责调用。</div></div>
         <div style="margin-top:12px;display:flex;gap:8px;">${act('测试连通性（真实调用一次模型）', 'testLlm', {}, 'btn btn-ai')}</div>
         ${SetState.testing ? '<div class="test-steps"><div class="empty"><span class="spin"></span>　正在测试（会真实调用模型，约 5~20 秒）…</div></div>' : ''}
@@ -80,33 +77,24 @@
       ${card('② 智能体护栏', '对应技术方案第五章「安全与信创治理」',
         `<div class="form-row"><div class="fl">最大工具调用轮次<small>防止无限循环</small></div><div class="fc">${input('agent.maxRounds', agent.maxRounds, { type: 'number', small: true })}</div></div>
         <div class="form-row"><div class="fl">护栏开关</div><div class="fc" style="display:flex;flex-direction:column;gap:10px;">
-          ${input('agent.requireCitation', agent.requireCitation !== false, { type: 'checkbox', label: '结论必须挂接出处（无出处自动降级为「假设」）' })}
-          ${input('agent.humanConfirm', agent.humanConfirm !== false, { type: 'checkbox', label: '对外发送 / 对外承诺 / 8D 关闭 三类动作强制人工确认' })}
+          <span>助手引用实际资料并标注待核实假设，标记为需确认的操作等待人工确认。</span>
           ${input('agent.maskSensitive', agent.maskSensitive !== false, { type: 'checkbox', label: '敏感信息脱敏（VIN / 手机号 / 身份证）' })}
         </div></div>
         <div class="form-row"><div class="fl">企业自定义要求<small>会追加到系统提示词</small></div><div class="fc">${input('agent.systemPersona', agent.systemPersona || '', { type: 'textarea', rows: 3, placeholder: '例如：本厂重点关注出口批次质量；术语请使用「FTT / QRQC / 8D」；回复请尽量简洁。' })}</div></div>
-        <div class="form-row"><div class="fl">个性化设置</div><div class="fc" style="font-size:12.5px;line-height:2;">
-          AI 晨报推送：每日 <b>07:30</b> · 渠道 ${(push.channels || []).join(' + ') || '企微 + 邮件'}<br>
-          判异预警：<b>ABC 级质量问题实时推送</b><br>
-          报告草稿默认汇报：<b>质量部部长</b>
-        </div></div>
         <div style="margin-top:12px;">${act('保存护栏设置', 'saveSettings', { section: 'agent' }, 'btn btn-primary')}</div>`)}
 
-      ${card('③ 插件总线配置', '本地数据仓 ↔ HTTP 直连 可切换',
-        table(['插件', '说明', '模式', '启用', '接口地址', ''],
+      ${card('③ 助手工具分组', '读取本地业务和已导入的数据',
+        table(['分组', '说明', '数据来源', '助手', ''],
           Object.keys(plugins).map((k) => {
             const p = plugins[k];
             return {
               cells: ['<b>' + esc(p.name) + '</b><br><span style="font-size:10.5px;color:#8791a5;">' + esc(p.desc) + '</span>',
-                esc(p.desc), p.mode === 'http' ? tag('HTTP 直连', 'purple') : tag('本地数据仓', 'blue'),
+                esc(p.desc), tag('本地数据仓', 'blue'),
                 p.enabled === false ? tag('已停用', 'gray') : tag('运行中', 'green'),
-                p.baseUrl || '<span style="color:#8791a5;">（未配置）</span>',
                 act('配置', 'pluginConfig', { key: k }, 'btn btn-sm')],
             };
           })) +
-        `<div style="font-size:11.5px;color:#5e6b85;margin-top:10px;line-height:1.9;">
-          <b>如何接入真实系统？</b>把对应插件的模式切到「HTTP 直连」并填入接口地址与鉴权信息，平台即按统一协议调用真实系统；未配置时使用本地数据仓（可用「数据管理」导入 Excel）。
-          当前六大业务插件的核心接口：<code>getMeasureData / getControlChart / getRuleViolations / getCpk / getBOM / getBatch / getSupplier / startWorkflow / pushTodo / submitBenefit / getDefects</code>。</div>`)}
+        '<p class="library-tip">MES、质检和财务分组使用本站已录入或导入的记录。外部系统接入需单独适配。</p>')}
 
       ${card('④ 数据管理', '本地数据仓：' + Object.entries(counts).map(([k, v]) => k + ' ' + v).join(' · '),
         `${dbStatus ? `<div style="border:1px solid #c9d8f5;background:#f7faff;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.9;margin-bottom:12px;">
@@ -117,6 +105,8 @@
           ${act('导入 Excel / CSV（测量数据）', 'importFile', { target: 'measurements' }, 'btn btn-primary')}
           ${act('导入问题清单', 'importFile', { target: 'issues' }, 'btn')}
           ${act('导入 AI 质检缺陷', 'importFile', { target: 'defects' }, 'btn')}
+          ${act('导入物料成本', 'importFile', { target: 'materials' }, 'btn')}
+          ${act('导入 BOM', 'importFile', { target: 'bom' }, 'btn')}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${act('重建初始数据', 'resetData', {}, 'btn')}
@@ -124,7 +114,7 @@
         </div>
         <div style="font-size:11.5px;color:#8791a5;margin-top:10px;line-height:1.9;">
           <b>导入格式说明：</b>Excel 第一行为表头，平台会自动识别中文/英文字段名（如「时间/测量值/特性编号/产品/车间/批号/供应商/班次/操作者/VIN」）。
-          测量数据导入后即可直接用于 SPC 判异、Cpk 计算与导出。若表头是特殊叫法，导出模板后按模板填写最稳妥：${act('导出模板', 'exportData', { dataset: 'measurements', filename: '导入模板_测量数据' }, 'btn btn-sm')}
+          测量可用于 SPC 判异和 Cpk。物料成本表需有编码、物料名称、单价、单位，BOM 表需有产品、零件、编码、层级、用量。若表头是特殊叫法，导出模板后按模板填写最稳妥：${act('导出模板', 'exportData', { dataset: 'measurement_template', filename: '导入模板_测量数据' }, 'btn btn-sm')}
         </div>`)}
       <div class="footer-note">${brand()} · 系统设置 · 以 MIT 许可开源（可自由修改、私有化部署与二次开发）</div>`;
     },
@@ -141,7 +131,7 @@
       return `
       <div class="ai-strip">
         <div class="ai-ico">🔍</div>
-        <div class="ai-txt"><b>全程审计：</b>每次工具调用都留痕（操作人、时间、插件、参数、结果摘要、用途），本地保存最近 5000 条。这是「数据不出厂 + 可追溯」的核心机制。</div>
+        <div class="ai-txt"><b>站内审计</b>　查阅工作单处理和助手工具的操作时间、经办人、用途与结果摘要。</div>
         ${act('导出审计日志', 'exportAudit', {}, 'btn')}
       </div>
       <div class="grid g4" style="margin-bottom:14px;">

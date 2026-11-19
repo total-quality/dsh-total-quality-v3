@@ -39,6 +39,7 @@ function writeScale(scale) {
 const store = require('./src/lib/store');
 const qms = require('./src/lib/qms');
 const qmsSurvey = require('./src/lib/qms-survey');
+const localWorkflows = require('./src/lib/local-workflows');
 const knowledge = require('./src/lib/knowledge-library');
 const library = knowledge.createLibrary(store);
 const qualitySkills = require('./src/lib/quality-skills');
@@ -128,6 +129,9 @@ function publicSettings() {
       : 'Harness 当前没有可用模型，请先在 Harness 里完成模型接入',
   });
   delete s.llm.apiKey;
+  for (const config of Object.values(s.plugins || {})) {
+    if (config && typeof config === 'object') delete config.apiKey;
+  }
   return s;
 }
 
@@ -207,6 +211,7 @@ route('GET', /^\/api\/bootstrap$/, async (req, res) => {
   sendJson(res, 200, {
     ok: true,
     org: store.getSetting('org', {}),
+    hasSampleData: !store.db.meta.userCleared,
     brand: brandName(),
     scale: currentScale(),
     scales: SCALES,
@@ -239,6 +244,7 @@ route('POST', /^\/api\/settings$/, async (req, res) => {
   // 深度合并
   function merge(base, patch) {
     for (const k of Object.keys(patch || {})) {
+      if (['__proto__', 'constructor', 'prototype'].includes(k)) continue;
       if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k])) { base[k] = merge(base[k] || {}, patch[k]); }
       else base[k] = patch[k];
     }
@@ -251,8 +257,7 @@ route('POST', /^\/api\/settings$/, async (req, res) => {
     if (incoming.llm.apiKey === '' || incoming.llm.apiKey === undefined) delete incoming.llm.apiKey;
     else if (incoming.llm.apiKey === null) incoming.llm.apiKey = '';
   }
-  store.db.settings = merge(cur, incoming);
-  store.touch(); store.saveSync(); store.emit();
+  store.transaction(() => { store.db.settings = merge(cur, incoming); });
   sendJson(res, 200, { ok: true, settings: publicSettings() });
 });
 /* ---------------- 版式：本发行版只提供「中小企业版」 ---------------- */
@@ -465,11 +470,16 @@ const WRITABLE = {
   benefits: ['projectId', 'type', 'amount', 'period', 'note', 'status'],
   members: ['name', 'role', 'dept', 'seniority', 'expert', 'skills', 'phone'],
   spcChars: ['name', 'model', 'workshop', 'station', 'nominal', 'usl', 'lsl', 'unit', 'subgroupSize', 'ctq'],
-  defects: ['type', 'workshop', 'station', 'model', 'confidence', 'severity', 'batch'],
+  defects: ['type', 'workshop', 'station', 'model', 'confidence', 'severity', 'batch', 'ts'],
   workflows: ['type', 'title', 'content', 'applicant', 'status', 'relatedId'],
   reports: ['type', 'title', 'period', 'status', 'scope'],
   chats: ['title', 'messages'],
 };
+
+route('POST', /^\/api\/(qrqc|benefits|workflows)\/([^/]+)\/decision$/, async (req,res,col,id) =>
+  sendJson(res, 200, {ok:true,row:localWorkflows.decide(store,col,id,await readJson(req))}));
+route('POST', /^\/api\/members\/([^/]+)\/growth$/, async (req,res,id) =>
+  sendJson(res, 201, {ok:true,row:localWorkflows.recordGrowth(store,id,await readJson(req))}));
 
 Object.keys(WRITABLE).forEach((col) => {
   route('GET', new RegExp('^/api/' + col + '$'), async (req, res) => {
@@ -490,6 +500,7 @@ Object.keys(WRITABLE).forEach((col) => {
   });
   route('POST', new RegExp('^/api/' + col + '$'), async (req, res) => {
     const body = await readJson(req);
+    if (col === 'members') return sendJson(res, 201, { ok: true, row: localWorkflows.saveMember(store, '', body) });
     const doc = {};
     WRITABLE[col].forEach((k) => { if (body[k] !== undefined) doc[k] = body[k]; });
     const rec = store.col(col).insert(doc);
@@ -502,9 +513,13 @@ Object.keys(WRITABLE).forEach((col) => {
   });
   route('PUT', new RegExp('^/api/' + col + '/([^/]+)$'), async (req, res, id) => {
     const body = await readJson(req);
+    if (col === 'members') return sendJson(res, 200, { ok: true, row: localWorkflows.saveMember(store, id, body) });
+    if (['qrqc', 'benefits', 'workflows'].includes(col) && body.status !== undefined) {
+      return sendJson(res, 409, { ok: false, error: '请通过对应的处理操作记录决定及依据' });
+    }
     const patch = {};
     WRITABLE[col].forEach((k) => { if (body[k] !== undefined) patch[k] = body[k]; });
-    const rec = store.col(col).update(id, patch);
+    const rec = col === 'todos' ? localWorkflows.updateTodo(store, id, patch) : store.col(col).update(id, patch);
     if (!rec) return sendJson(res, 404, { ok: false, error: '未找到 ' + id });
     sendJson(res, 200, { ok: true, row: rec });
   });
@@ -525,7 +540,7 @@ route('POST', /^\/api\/tools\/([^/]+)$/, async (req, res, name) => {
   try {
     const out = await tool.run(args, { outputDir: OUTPUT_DIR });
     store.audit({ user: '当前用户', plugin: tool.plugin, action: tool.label + '（界面直接调用）', params: args, resultSummary: agent.summarize(name, out), purpose: '界面操作' });
-    sendJson(res, 200, { ok: out && out.ok !== false, result: out, summary: agent.summarize(name, out) });
+    sendJson(res, 200, { ok: out && out.ok !== false, error: out?.error, result: out, summary: agent.summarize(name, out) });
   } catch (e) {
     sendJson(res, 200, { ok: false, error: e.message });
   }
@@ -759,6 +774,7 @@ route('GET', /^\/api\/audit$/, async (req, res) => {
 route('POST', /^\/api\/import$/, async (req, res) => {
   const body = await readJson(req);
   const { filename, base64, target, mapping } = body;
+  if (target && !['measurements', 'issues', 'defects', 'materials', 'bom'].includes(target)) return sendJson(res, 400, { ok:false, error:'不支持该导入目标' });
   if (!filename || !base64) return sendJson(res, 400, { ok: false, error: '缺少 filename / base64' });
   if (!target || target === 'measurements') {
     const preview = operations.preview({ filename, base64 });
@@ -774,7 +790,7 @@ route('POST', /^\/api\/import$/, async (req, res) => {
   } catch (e) {
     return sendJson(res, 200, { ok: false, error: '文件解析失败：' + e.message });
   }
-  const result = importSheets(sheets, target || 'measurements', mapping);
+  const result = store.transaction(() => importSheets(sheets, target || 'measurements', mapping));
   store.audit({ user: '当前用户', plugin: '@MES', action: '导入数据', params: { filename, target, rows: result.imported }, resultSummary: '导入 ' + result.imported + ' 行', purpose: '数据接入' });
   sendJson(res, 200, Object.assign({ ok: true, filename, sheets: sheets.map((s) => ({ name: s.name, rows: s.rows.length })), preview: sheets[0].rows.slice(0, 6) }, result));
 });
@@ -782,6 +798,12 @@ route('POST', /^\/api\/import$/, async (req, res) => {
 /** 把表格数据导入指定集合：自动识别表头（中文/英文字段名） */
 function importSheets(sheets, target, mapping) {
   const aliases = {
+    materials: {
+      code:['编码','code'], name:['物料','物料名称','name'], price:['单价','price'], unit:['单位','unit'], supplier:['供应商','supplier'],
+    },
+    bom: {
+      model:['产品','model'], part:['零件','part'], code:['编码','code'], level:['层级','level'], quantity:['用量','数量','quantity'], supplier:['供应商','supplier'],
+    },
     measurements: {
       charId: ['特性编号', '特性', 'charid', 'char_id', '特性代码'], charName: ['特性名称', '名称', 'charname'],
       model: ['产品', 'model', '产品'], workshop: ['车间', 'workshop'], station: ['工位', 'station', '工序'],
@@ -825,7 +847,7 @@ function importSheets(sheets, target, mapping) {
       if (v === undefined || v === null) continue;
       v = String(v).trim();
       if (!v) continue;
-      if (field === 'value' || field === 'confidence') { const n = Number(v); if (!Number.isFinite(n)) continue; obj[field] = n; continue; }
+      if (['value','confidence','price','level','quantity'].includes(field)) { const n = Number(v); if (!Number.isFinite(n)) continue; obj[field] = n; continue; }
       if (field === 'ts' || field === 'createdAt') {
         let t = v.replace(/\//g, '-');
         if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(t)) t += 'T08:00:00+08:00';
@@ -849,7 +871,34 @@ function importSheets(sheets, target, mapping) {
       store.col('measurements').insert(rec, true);
       imported++;
     } else {
-      if (!obj.title && target === 'issues') { skipped++; continue; }
+      if (target === 'materials' || target === 'bom') {
+        const materials = target === 'materials';
+        const valid = materials ? obj.code && obj.name && obj.unit && Number.isFinite(obj.price) && obj.price >= 0
+          : obj.model && obj.part && obj.code && Number.isInteger(obj.level) && obj.level >= 1 && Number.isFinite(obj.quantity) && obj.quantity > 0;
+        if (!valid) {
+          skipped++;
+          if (errors.length < 5) errors.push('第 ' + (r + 1) + ' 行缺少必填字段或数值无效');
+          continue;
+        }
+        const rows = store.col(target);
+        const existing = rows.one((row) => row.code === obj.code && (materials || (row.model === obj.model && row.level === obj.level)));
+        if (existing) rows.update(existing.id, obj, true);
+        else rows.insert(obj, true);
+        imported++;
+        continue;
+      }
+      if ((!obj.title && target === 'issues') || (!obj.type && target === 'defects')) { skipped++; continue; }
+      if (target === 'defects') obj.ts ||= new Date().toISOString();
+      if (target === 'issues') {
+        const severity = String(obj.severity || 'C').trim().toUpperCase().replace(/\s*级$/, '');
+        if (!['A', 'B', 'C'].includes(severity)) {
+          skipped++;
+          if (errors.length < 5) errors.push('第 ' + (r + 1) + ' 行问题等级须为 A、B 或 C');
+          continue;
+        }
+        obj.severity = severity;
+        obj.status = 'open';
+      }
       store.col(target).insert(Object.assign({ source: '导入' }, obj), true);
       imported++;
     }
@@ -891,13 +940,19 @@ route('POST', /^\/api\/data\/reset$/, async (req, res) => {
 route('POST', /^\/api\/data\/clear$/, async (req, res) => {
   const body = await readJson(req);
   const keep = (store.db.settings && store.db.settings.llm) || {};
-  const cols = body.collections || ['issues', 'projects', 'measurements', 'knowledge', 'defects', 'qrqc', 'workflows', 'todos', 'benefits', 'reports', 'audit', 'chats', 'pendingActions', 'operationCases', 'operationEvents', 'operationImports', 'analysisRecords'];
+  const fullClear = body.collections === undefined;
+  const cols = body.collections || ['issues', 'projects', 'measurements', 'knowledge', 'defects', 'qrqc', 'workflows', 'todos', 'benefits', 'reports', 'audit', 'chats', 'pendingActions', 'operationCases', 'operationEvents', 'operationImports', 'analysisRecords', 'materials', 'bom'];
   if (!Array.isArray(cols) || cols.some((c) => typeof c !== 'string' || !Array.isArray(store.db[c]))) return sendJson(res, 400, { ok: false, error: '清空范围须为有效业务集合' });
-  cols.forEach((c) => { store.db[c] = []; });
-  store.db.meta.userCleared = true;
-  store.db.settings = store.db.settings || {};
-  store.db.settings.llm = Object.assign(store.db.settings.llm || {}, keep);
-  store.saveSync(true, true);
+  store.transaction(() => {
+    cols.forEach((c) => { store.db[c] = []; });
+    if (fullClear) {
+      store.db.meta.userCleared = true;
+      delete store.db.meta.operationsLastScan;
+      delete store.db.meta.operationsLastResult;
+    }
+    store.db.settings = store.db.settings || {};
+    store.db.settings.llm = Object.assign(store.db.settings.llm || {}, keep);
+  });
   sendJson(res, 200, { ok: true, cleared: cols, message: '已清空 ' + cols.length + ' 个集合' });
 });
 
@@ -998,7 +1053,7 @@ route('POST', /^\/api\/qms\/generate$/, async (req, res) => {
   if (runtime.llm) {
     try {
       const prompt = type === 'manual' ? qms.manualPrompt(b) : (type === 'procedure' ? qms.procedurePrompt(b) : qms.tier3Prompt(b));
-      const r = await runtime.llm.complete({ system: '您只输出 Markdown 正文，不写解释、不加代码块围栏。', user: prompt, maxTokens: type === 'manual' ? 3600 : (type === 'procedure' ? 6000 : 9000) });
+      const r = await runtime.llm.complete({ system: '您只输出 Markdown 正文，不写解释、不加代码块围栏。', user: prompt, maxTokens: type === 'manual' ? 6000 : (type === 'procedure' ? 6000 : 9000), reasoning: false });
       const text = String((r && r.text) || '').replace(/^```(?:markdown|md)?\s*/i, '').replace(/```\s*$/, '').trim();
       if (text.length >= (type === 'manual' ? 800 : (type === 'procedure' ? 1500 : 2500))) {
         if (type === 'manual') {

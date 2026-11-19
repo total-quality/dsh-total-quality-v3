@@ -117,8 +117,8 @@
       tool: 'doe_design', custom: 'doe',
     },
     qualitycost: {
-      title: '质量成本（COPQ）计算', desc: '按 PAF 模型计算四项质量成本与质量成本率。留空则用平台默认口径。',
-      fields: [{ key: 'prevention', label: '预防成本（万元）', type: 'number' }, { key: 'appraisal', label: '鉴定成本（万元）', type: 'number' }, { key: 'internalFailure', label: '内部失败成本（万元）', type: 'number' }, { key: 'externalFailure', label: '外部失败成本（万元）', type: 'number' }, { key: 'salesRevenue', label: '销售收入（万元）', type: 'number' }],
+      title: '质量成本（PAF）计算', desc: '填写同一期间的实际成本，无发生额填 0。补充销售收入后可计算质量成本率。',
+      fields: [{ key: 'prevention', label: '预防成本（万元）', type: 'number', required:true }, { key: 'appraisal', label: '鉴定成本（万元）', type: 'number', required:true }, { key: 'internalFailure', label: '内部失败成本（万元）', type: 'number', required:true }, { key: 'externalFailure', label: '外部失败成本（万元）', type: 'number', required:true }, { key: 'salesRevenue', label: '销售收入（万元，可空）', type: 'number' }],
       tool: 'quality_cost_calc',
     },
     pareto: {
@@ -145,7 +145,7 @@
       tool: 'fmea_analyze', custom: 'fmea',
     },
     gantt: {
-      title: '甘特图规划', desc: '每行一个任务：任务名,工期天,依赖任务名,责任人。默认已按 8D 节奏填好一版，可直接改。',
+      title: '甘特图规划', desc: '每行一个任务：任务名,工期天,依赖任务名,责任人。多个依赖用「|」分隔。下方是可修改的排程样例。',
       fields: [{ key: 'tasksText', label: '任务清单', type: 'textarea', rows: 5, def: 'D3 围堵措施,3,,李雪\nD4 根因验证,5,D3 围堵措施,王磊\nD5 对策制定,7,D4 根因验证,李雪\nD6 对策实施,10,D5 对策制定,王磊\nD7 效果验证,7,D6 对策实施,张涛' }, { key: 'startDate', label: '开始日期', type: 'text', placeholder: 'YYYY-MM-DD' }],
       tool: 'gantt_plan', custom: 'gantt',
     },
@@ -249,7 +249,7 @@
 
   /** 本地等宽分箱（粘贴数据时用） */
   function binsOf(values, k) {
-    const bins = Math.max(2, Math.min(30, k || 12));
+    const bins = Math.max(2, Math.min(30, Math.round(k || 12)));
     const lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
     const w = (hi - lo) / bins || 1;
     const out = [];
@@ -357,7 +357,10 @@
         args = { process: vals.process, items: (vals.rows || '').split('\n').map((l) => l.split(/[,，]/)).filter((a) => a.length >= 6).map((a) => ({ failureMode: a[0].trim(), effect: a[1].trim(), cause: a[2].trim(), s: Number(a[3]), o: Number(a[4]), d: Number(a[5]) })) };
         if (!args.items.length) throw new Error('请至少填写一行失效模式（失效模式,失效影响,失效原因,S,O,D）');
       } else if (w.tool === 'gantt_plan') {
-        const tasks = (vals.tasksText || '').split('\n').map((l) => l.split(/[,，]/)).filter((a) => a[0] && a[0].trim()).map((a) => ({ name: a[0].trim(), duration: Number(a[1]) || 1, deps: a[2] && a[2].trim() ? [a[2].trim()] : [], owner: a[3] && a[3].trim() || '' }));
+        const tasks = (vals.tasksText || '').split('\n').map((l) => l.split(/[,，]/)).filter((a) => a[0] && a[0].trim()).map((a) => ({
+          name:a[0].trim(), duration:a[1]?.trim() ? Number(a[1]) : undefined,
+          deps:(a[2] || '').split('|').map((name) => name.trim()).filter(Boolean), owner:a[3]?.trim() || '',
+        }));
         args = { tasks, startDate: vals.startDate || undefined };
       } else if (w.tool === 'quality_cost_calc') {
         ['prevention', 'appraisal', 'internalFailure', 'externalFailure', 'salesRevenue'].forEach((k) => { if (vals[k] !== null && vals[k] !== '' && vals[k] !== undefined) args[k] = Number(vals[k]); });
@@ -389,7 +392,7 @@
       } else if (w.tool === 'doe_design') {
         const factors = (vals.factorsText || '').split('\n').map((l) => l.split(/[,，]/)).filter((a) => a[0] && a[0].trim()).map((a) => ({ name: a[0].trim(), low: a[1] ? a[1].trim() : '-1', high: a[2] ? a[2].trim() : '+1' }));
         if (factors.length < 2) throw new Error('请至少填写 2 个因子');
-        args = { factors, design: vals.design, replicates: vals.replicates || 2, response: vals.response || '响应值' };
+        args = { factors, design: vals.design, replicates: vals.replicates ?? 2, response: vals.response || '响应值' };
       } else if (w.tool === 'stat_control_chart_calc') {
         if (vals.values) args.values = parseNums(vals.values);
         else if (vals.charId) args.charId = vals.charId;
@@ -400,8 +403,8 @@
         else if (vals.charId) args = { charId: vals.charId, days: 30 };
         else throw new Error('请选择平台特性或粘贴数据');
       } else if (w.tool === 'spc_histogram') {
-        if (vals.charId) args = { charId: vals.charId, days: 30, bins: Number(vals.bins) || 12 };
-        else if (vals.values) args = { values: parseNums(vals.values) };
+        if (vals.values) args = { values: parseNums(vals.values) };
+        else if (vals.charId) args = { charId: vals.charId, days: 30, bins: Number(vals.bins) || 12 };
         else throw new Error('请选择平台特性或粘贴数据');
       }
     } catch (e) {
@@ -416,13 +419,13 @@
           const r = await API.tool('spc_histogram', { charId: args.charId, days: 30, bins: Number(vals.bins) || 12 });
           const res = (r && r.result) || {};
           if (res.ok === false) { out.innerHTML = `<div style="color:#e5484d;font-size:12.5px;">❌ ${esc(res.error || '计算失败')}</div>`; return; }
-          const spec = res.规格限 || {};
+          const [lsl, usl] = res.规格限 || [];
           lastResult = res; lastName = 'spc_histogram_' + args.charId;
-          out.innerHTML = histogramChart(res.分箱 || [], spec.LSL, spec.USL) +
+          out.innerHTML = histogramChart(res.分箱 || [], lsl, usl) +
             '<div style="margin-top:10px;">' + generic(res, 0) + '</div>' + resultTail('spc_histogram', { charId: args.charId, bins: Number(vals.bins) || 12 });
           return;
         }
-        const values = parseNums(vals.values);
+        const values = args.values;
         if (values.length < 5) throw new Error('请粘贴至少 5 个数据（或直接选一个平台特性）');
         const bins = binsOf(values, Number(vals.bins) || 12);
         const stat = await API.tool('stat_describe', { values });
@@ -459,7 +462,11 @@
   }
 
   function parseNums(s) {
-    return String(s || '').split(/[\s,，;；\n\t]+/).map((x) => Number(x)).filter((x) => Number.isFinite(x));
+    const tokens = String(s || '').split(/[\s,，;；]+/).filter(Boolean);
+    const values = tokens.map(Number);
+    const invalid = values.findIndex((value) => !Number.isFinite(value));
+    if (invalid >= 0) throw new Error('第 ' + (invalid + 1) + ' 个值不是有效数字：' + tokens[invalid]);
+    return values;
   }
 
   // 两套版式提供同一套工具（34 项），不做删减、也不打角标

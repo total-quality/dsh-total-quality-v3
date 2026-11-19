@@ -57,21 +57,24 @@ function createBridge(ctx) {
     return err;
   }
 
-  async function prepare(info, maxTokens, signal) {
+  async function prepare(info, maxTokens, signal, reasoning) {
     const llm = llmService();
     if (!llm) throw noModelError();
-    return llm.prepareCall({ provider: info.provider, model: info.model, maxTokens }, signal);
+    const configure = reasoning === false ? (controls, modelInfo) =>
+      modelInfo.reasoning?.efforts.some(({ id }) => id === 'off')
+        ? { ...controls, reasoningEffort: 'off' } : controls : undefined;
+    return llm.prepareCall({ provider: info.provider, model: info.model, maxTokens }, signal, configure);
   }
 
   /** 流式调用一次模型，返回完整文本。 */
-  async function complete({ system, user, maxTokens = 3200, signal, onDelta }) {
+  async function complete({ system, user, maxTokens = 3200, signal, onDelta, reasoning: useReasoning }) {
     const first = selection();
     if (!first) throw noModelError();
 
     let info = first;
     let call;
     try {
-      call = await prepare(first, maxTokens, signal);
+      call = await prepare(first, maxTokens, signal, useReasoning);
     } catch (err) {
       // 锁定模型宿主解析不到（或该 provider 未登录）：回落到 Harness 当前模型，只回落一次
       if (!first.pinned) throw err;
@@ -82,7 +85,7 @@ function createBridge(ctx) {
         '[qip-real-v3] 锁定模型 ' + first.provider + ' / ' + first.model + ' 不可用（' + err.message + '），回落到 Harness 当前模型 ' + fallback.provider + ' / ' + fallback.model,
       );
       info = fallback;
-      call = await prepare(fallback, maxTokens, signal);
+      call = await prepare(fallback, maxTokens, signal, useReasoning);
     }
 
     let text = '';

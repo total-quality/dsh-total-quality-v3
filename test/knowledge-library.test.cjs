@@ -83,6 +83,23 @@ test('profile extraction keeps only allowed fields supported by a real quote', a
   assert(values.every((r) => r.source.documentId === doc.id));
 });
 
+test('survey extraction accepts quoted facts from narrative prose and fenced model JSON', async () => {
+  const library = makeLibrary();
+  const document = add(library, '工作会议纪要.txt', '全员会上确认的质量方针是以批次追溯为基础，先预防后放行。').document;
+  await settled(library, document.id);
+  const llm = { complete: async ({ reasoning, system }) => {
+    assert.equal(reasoning, false);
+    assert.match(system, /自然语言段落/);
+    const result = { candidates: [{
+      field:'policy', value:'以批次追溯为基础，先预防后放行',
+      source:1, quote:'确认的质量方针是以批次追溯为基础，先预防后放行。',
+    }] };
+    return { text:'提取结果如下。\n```json\n' + JSON.stringify(result) + '\n```' };
+  } };
+  const rows = await suggestions(library, llm, 'survey', document.id, new AbortController().signal);
+  assert.deepEqual(rows.map(({ field,value }) => [field,value]), [['policy','以批次追溯为基础，先预防后放行']]);
+});
+
 test('an interrupted ingest is resumed from the stored original, and citations have nearby context', async () => {
   const { DatabaseSync } = require('node:sqlite');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qip-library-resume-'));

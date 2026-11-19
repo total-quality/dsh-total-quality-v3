@@ -23,13 +23,6 @@ const CONFIRM_HINT = '该动作属于「对外发送 / 对外承诺 / 项目关�
 
 /* ---------------- 工具筛选与目录 ---------------- */
 
-function pluginFilter(settings) {
-  const plugins = (settings && settings.plugins) || {};
-  const disabled = new Set();
-  Object.keys(plugins).forEach((k) => { if (plugins[k] && plugins[k].enabled === false) disabled.add(plugins[k].name); });
-  return (t) => !disabled.has(t.plugin);
-}
-
 function signatureOf(params) {
   const props = (params && params.properties) || {};
   const required = new Set((params && params.required) || []);
@@ -133,7 +126,7 @@ async function run(p, onEvent) {
     return { ok: false, code: 'NO_MODEL' };
   }
 
-  const tools = registry.all().filter(pluginFilter(settings));
+  const tools = registry.all().filter(registry.assistantFilter(settings));
   const byName = new Map(tools.map((t) => [t.name, t]));
   emit({ type: 'start', model: (runtime.model && runtime.model.model) || 'DeepSeek', tools: tools.length, rounds: maxRounds });
 
