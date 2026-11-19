@@ -1,4 +1,5 @@
 'use strict';
+const { activeProjects, projectIsClosed, projectStageCode, projectProgress } = require('../lib/business');
 /**
  * 业务类工具：问题库 / 改进项目(8D) / 知识库 / QRQC / OA 审批 / 财务收益 / 质量工程方法
  * ------------------------------------------------------------------
@@ -218,16 +219,16 @@ define({
   },
   run(args) {
     let rows = store.col('projects').all().slice();
-    if (args.stage) rows = rows.filter((r) => r.stage === args.stage || (STAGES.find((s) => s.key === r.stage) || {}).name === args.stage);
+    if (args.stage) rows = rows.filter((r) => r.stage === args.stage || projectStageCode(r) === args.stage || (STAGES.find((s) => s.key === projectStageCode(r)) || {}).name === args.stage);
     if (args.owner) rows = rows.filter((r) => r.owner === args.owner);
     if (args.model) rows = rows.filter((r) => r.model === args.model);
-    if (args.overdueOnly) rows = rows.filter((r) => r.overdue && r.stage !== 'D8');
+    if (args.overdueOnly) rows = activeProjects(rows).filter((r) => r.overdue);
     const list = rows.map((r) => {
-      const st = STAGES.find((s) => s.key === r.stage) || {};
-      return { 编号: r.id, 项目: r.title, 产品: r.model, 车间: r.workshop, 责任人: r.owner, 等级: r.severity, 当前阶段: r.stage + ' ' + (st.name || ''), SLA: st.sla, 交付物: st.deliverable, 进度: r.progress + '%', 截止: (r.dueAt || '').slice(0, 10), 超期: r.overdue ? '是（逾期 ' + r.overdueDays + ' 天）' : '否', 来源问题: r.issueId, 预估收益: r.benefitEstimate + ' 万元' };
+      const st = STAGES.find((s) => s.key === projectStageCode(r)) || {};
+      return { 编号: r.id, 项目: r.title, 产品: r.model, 车间: r.workshop, 责任人: r.owner, 等级: r.severity, 当前阶段: r.stageLabel ? projectStageCode(r) + ' ' + r.stageLabel : (projectStageCode(r) || r.stage) + ' ' + (st.name || ''), SLA: st.sla, 交付物: st.deliverable, 进度: r.progress + '%', 截止: (r.dueAt || '').slice(0, 10), 超期: !projectIsClosed(r) && r.overdue ? '是（逾期 ' + r.overdueDays + ' 天）' : '否', 来源问题: r.issueId, 预估收益: r.benefitEstimate + ' 万元' };
     });
     list.sort((a, b) => (a.超期 === b.超期 ? 0 : a.超期 === '否' ? -1 : 1));
-    return { ok: true, 数据来源: '平台改进项目库（8D）', 项目数: list.length, 超期数: rows.filter((r) => r.overdue && r.stage !== 'D8').length, 阶段分布: countBy(rows, 'stage'), 项目清单: list.slice(0, args.limit || 30) };
+    return { ok: true, 数据来源: '平台改进项目库（8D）', 项目数: list.length, 超期数: activeProjects(rows).filter((r) => r.overdue).length, 阶段分布: countBy(rows, 'stage'), 项目清单: list.slice(0, args.limit || 30) };
   },
 });
 
@@ -1048,8 +1049,7 @@ define({
     }
     const issues = store.col('issues').all();
     const projects = store.col('projects').all();
-    const open = projects.filter((p) => p.stage !== 'D8');
-    const onTime = open.filter((p) => !p.overdue).length;
+    const { open, overdue, onTimeRate } = projectProgress(projects);
     const ledger = store.col('benefits').all();
     const verified = ledger.filter((b) => b.status === 'verified').reduce((a, c) => a + c.amount, 0);
     return {
@@ -1062,8 +1062,8 @@ define({
         未关闭问题: issues.filter((i) => i.status !== '已关闭').length,
         A级问题: issues.filter((i) => i.severity === 'A' && i.status !== '已关闭').length,
         在改项目: open.length,
-        项目按期率: open.length ? ((onTime / open.length) * 100).toFixed(1) + '%' : '—',
-        超期项目: open.filter((p) => p.overdue).length,
+        项目按期率: onTimeRate,
+        超期项目: overdue,
         已核定收益万元: Number(verified.toFixed(1)),
         待核定收益万元: Number(ledger.filter((b) => b.status === 'pending').reduce((a, c) => a + c.amount, 0).toFixed(1)),
       },

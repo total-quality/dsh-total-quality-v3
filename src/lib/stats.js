@@ -1355,7 +1355,7 @@ const RULE_META = {
  * @returns {Array<{rule:number,name:string,indexes:number[],desc:string,severity:string}>}
  *          按下标升序返回命中的全部准则（每准则合并为一条，indexes 去重升序）。
  */
-function spcRules(values, limits) {
+function spcRules(values, limits, opts = {}) {
   const d = clean(values);
   const L = limits || {};
   const center = asNumber(L.center);
@@ -1373,10 +1373,12 @@ function spcRules(values, limits) {
   const n = d.length;
   const z = d.map((v) => (sigma > 0 ? (v - center) / sigma : 0));
   const hits = {}; // rule -> Set(index)
+  const windows = {};
 
   const mark = (rule, idxs) => {
     if (!hits[rule]) hits[rule] = new Set();
     for (const i of idxs) hits[rule].add(i);
+    if (opts.includeWindows) (windows[rule] ||= []).push([idxs[0], idxs.at(-1)]);
   };
 
   // 准则1：1 点超出 UCL/LCL（A 区之外）
@@ -1508,6 +1510,7 @@ function spcRules(values, limits) {
       rule: r,
       name: RULE_META[r].name,
       indexes,
+      ...(opts.includeWindows ? { windows: windows[r] } : {}),
       desc: RULE_META[r].name + '；命中下标：' + segs + '（0-based，共 ' + indexes.length + ' 点）',
       severity: RULE_META[r].severity,
     });

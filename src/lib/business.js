@@ -101,7 +101,33 @@ function demoBusiness(c={}){
  return normalizeBusiness({route,enforce:true,productCode:'DEMO-P001',productRevision:'B',lot:c.batch||'B-示例01',productionOrder:'DEMO-WO-001',purchaseOrder:'DEMO-PO-001',supplier:'示例供应商A',supplierLot:'DEMO-SL-001',customer:'某主机厂',shipment:'DEMO-SO-001',operation:c.location||'机加工',equipment:'DEMO-MC-01',fixture:'DEMO-JIG-01',gauge:'DEMO-GA-01',gaugeValidUntil:date,standard:'示例检验规范 V-B',changeRequest:'DEMO-EC-001',totalQty:40,stockQty:36,wipQty:4,shippedQty:0,heldQty:40,checkedQty:40,failedQty:1,returnedQty:0,reworkQty:1,scrapQty:0,dispositionRecord:'DEMO-HOLD-001（合成演示记录）',baselineChecked:40,baselineFailed:1,actionDate:date,requiredBatches:3,allowedDefectRate:0,verificationLots:[1,2,3].map(n=>({batch:'DEMO-VERIFY-'+n,date,checked:50,failed:0,record:'DEMO-QC-'+n+'（合成演示）'})),changes:changeFields.map(([key])=>({key,status:'done',record:'DEMO-'+key+'-B（合成演示记录）'}))},c);
 }
 
-return {businessRoutes,businessFields,quantityFields,changeFields,businessDefault,normalizeBusiness,assessBusiness,businessSummary,demoBusiness};})();
+function projectStageCode(project) {
+  return /^D[1-8](?=\s|$)/.exec(project.stageCode || project.stage || '')?.[0] || '';
+}
+function projectIsClosed(project) {
+  if (project.status === 'closed' || project.closedAt) return true;
+  return project.status !== 'open' && projectStageCode(project) === 'D8';
+}
+function activeProjects(projects) {
+  return projects.filter((project) => !projectIsClosed(project));
+}
+function projectProgress(projects) {
+  const open = activeProjects(projects);
+  const overdue = open.filter((p) => p.overdue).length;
+  const onTimeRate = open.length ? ((open.length - overdue) / open.length * 100).toFixed(1) + '%' : '—';
+  return { open, overdue, onTimeRate };
+}
+function taskRequirement(task) {
+  return [task.planVersion ? '采用方案版本 ' + task.planVersion : '历史执行要求', task.instruction,
+    task.planAction && task.planAction !== task.instruction ? '批准的处理动作：' + task.planAction : '',
+    task.verification ? '验证要求：' + task.verification : ''].filter(Boolean).join('\n');
+}
+function planRevisionText(revision) {
+  return [revision.legacy ? '历史版本，按旧记录已保留的执行指令回溯' : '批准人：' + revision.approvedBy + ' · ' + revision.approvedAt,
+    '处理动作：' + revision.action, revision.verification ? '验证要求：' + revision.verification : '',
+    '责任人：' + revision.owner, '期限：' + revision.due].filter(Boolean).join('\n');
+}
+return {projectStageCode,projectIsClosed,activeProjects,projectProgress,taskRequirement,planRevisionText,businessRoutes,businessFields,quantityFields,changeFields,businessDefault,normalizeBusiness,assessBusiness,businessSummary,demoBusiness};})();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = QBusiness;
 else globalThis.QBusiness = QBusiness;

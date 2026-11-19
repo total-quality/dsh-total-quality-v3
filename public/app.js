@@ -1181,10 +1181,14 @@ global.Scale = {
     importFile: (a) => {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.xlsx,.csv';
+      input.accept = a.target === 'measurements' ? '.xlsx,.csv,.json' : '.xlsx,.csv';
       input.onchange = async () => {
         const f = input.files[0];
         if (!f) return;
+        if (a.target === 'measurements') {
+          try { await global.OperationsUI.receiveFile(f); } catch (e) { toast('预检失败：' + e.message, 'err'); }
+          return;
+        }
         toast('正在解析并导入 ' + f.name + ' …', 'ai', 8000);
         try {
           const r = await API.importFile(f, a.target);
@@ -1202,13 +1206,13 @@ global.Scale = {
     },
     resetData: () => modal({
       width: 'narrow', title: '重建初始数据', sub: '会清空所有业务数据（保留模型配置）',
-      body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 该操作会清空问题库、项目、测量数据、知识库等全部业务数据，并重新灌入初始数据。模型配置会保留。</div>',
+      body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 该操作会清空问题库、项目、测量数据、知识库等全部业务数据，并重新生成样例数据，无法恢复已清空的真实记录。模型配置会保留。</div>',
       footer: `${act('取消', '__closeModal', {}, 'btn')}${act('确认重建', 'resetDataDo', {}, 'btn btn-primary')}`,
     }),
     resetDataDo: async () => { await API.post('/qip-real-v3/api/data/reset', {}); closeModal(); toast('初始数据已重建', 'ok'); await loadBootstrap(); refresh(); },
     clearData: () => modal({
       width: 'narrow', title: '清空业务数据', sub: '用于导入真实数据前的清场',
-      body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 将清空全部业务数据（不含人员与系统设置），之后页面会显示空状态。可通过「重建初始数据」恢复。</div>',
+      body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 将清空全部业务数据（不含人员与系统设置），之后页面会显示空状态。「重建初始数据」仅重新生成样例数据，无法恢复已清空的真实记录。</div>',
       footer: `${act('取消', '__closeModal', {}, 'btn')}${act('确认清空', 'clearDataDo', {}, 'btn btn-primary')}`,
     }),
     clearDataDo: async () => { await API.post('/qip-real-v3/api/data/clear', {}); closeModal(); toast('已清空', 'ok'); await loadBootstrap(); refresh(); },

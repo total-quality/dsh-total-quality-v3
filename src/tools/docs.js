@@ -1,4 +1,5 @@
 'use strict';
+const { projectProgress, taskRequirement } = require('../lib/business');
 /**
  * 文档与报表工具：让智能体产出"可交付物"
  * ------------------------------------------------------------------
@@ -83,6 +84,8 @@ define({
       for (const step of steps) {
         const accepted = (c?.submissions || []).filter((s) => s.taskKey===step && s.acceptedBy);
         blocks.push({type:'h1',text:labels[step]});
+        const task = c?.tasks?.find((t) => t.key === step);
+        if (task) blocks.push({type:'p',text:taskRequirement(task)});
         if (accepted.length) blocks.push({type:'table',header:['执行结果','证据','复核人'],rows:accepted.map((s)=>[s.result,s.evidence,s.acceptedBy])});
         else {
           const key = {contain:'d3',cause:'d4',correct:'d5',verify:'d6'}[step];
@@ -206,7 +209,7 @@ function dashboardSnapshot(scope, range) {
   }
   const issues = store.col('issues').all().filter((row)=>inRange(row.createdAt) && (!scope || [row.id,row.model,row.workshop,row.title].some((part)=>String(part || '').includes(scope))));
   const projects = store.col('projects').all().filter((p) => !scope || (p.workshop + p.model + p.id + p.title).indexOf(scope) >= 0);
-  const open = projects.filter((p) => p.stage !== 'D8');
+  const { open, overdue, onTimeRate } = projectProgress(projects);
   const ledger = store.col('benefits').all().filter((row)=>inRange(row.verifiedAt || row.createdAt));
   return {
     measurements, oos, violations, violationRows, charRows,
@@ -214,8 +217,7 @@ function dashboardSnapshot(scope, range) {
     issueTotal: issues.length, issueOpen: issues.filter((i) => i.status !== '已关闭').length,
     issueA: issues.filter((i) => i.severity === 'A' && i.status !== '已关闭').length,
     topIssues: issues.slice().sort((a, b) => (b.aiSimilarity || 0) - (a.aiSimilarity || 0)).slice(0, 8),
-    projOpen: open.length, projOverdue: open.filter((p) => p.overdue).length,
-    onTimeRate: open.length ? ((open.filter((p) => !p.overdue).length / open.length) * 100).toFixed(1) + '%' : '—',
+    projOpen: open.length, projOverdue: overdue, onTimeRate,
     projects: open.slice(0, 12),
     benefitVerified: Number(ledger.filter((b) => b.status === 'verified').reduce((a, c) => a + c.amount, 0).toFixed(1)),
     dataAt: localStamp(dataNow()),
@@ -242,18 +244,18 @@ define({
     const sheets = [];
     const add = (name, rows) => { if (rows && rows.length) sheets.push({ name, rows }); };
 
-    if (ds === 'measurement_template') add('测量数据', [['特性编号','特性名称','测量值','规格下限','规格上限','批次','产品','车间','工位','时间','班次','单位','供应商','操作者','VIN','子组']]);
+    if (ds === 'measurement_template') add('测量数据', [['特性编号','特性名称','测量值','规格下限','规格上限','批次','产品','车间','工位','时间','班次','单位','供应商','操作者','VIN','子组','测量来源','源测量编号']]);
     if (ds === 'issues' || ds === 'all') add('质量问题库', [['编号', '产品', '车间', '工位', '问题描述', '来源', '等级', '状态', '责任人', '关联项目', '登记时间', '关闭时间']].concat(
       store.col('issues').all().map((i) => [i.id, i.model, i.workshop, i.station, i.title, i.source, i.severity, i.status, i.owner, i.projectId || '', (i.createdAt || '').slice(0, 10), i.closedAt ? i.closedAt.slice(0, 10) : ''])));
     if (ds === 'projects' || ds === 'all') add('改进项目', [['编号', '项目名称', '产品', '车间', '责任人', '等级', '当前阶段', '进度', '截止日期', '是否超期', '来源问题', '预估收益(万元)']].concat(
       store.col('projects').all().map((p) => [p.id, p.title, p.model, p.workshop, p.owner, p.severity, p.stage, p.progress + '%', (p.dueAt || '').slice(0, 10), p.overdue ? '超期' : '正常', p.issueId, p.benefitEstimate])));
     if (ds === 'measurements' || ds === 'all') {
-      const rows = [['特性编号', '特性名称', '产品', '车间', '工位', '时间', '班次', '测量值', '单位', '批次', '供应商', '操作者', 'VIN', '规格下限', '规格上限', '子组']];
+      const rows = [['特性编号', '特性名称', '产品', '车间', '工位', '时间', '班次', '测量值', '单位', '批次', '供应商', '操作者', 'VIN', '规格下限', '规格上限', '子组', '测量来源', '源测量编号']];
       const chars = new Map(store.col('spcChars').all().map((c) => [c.id,c]));
       let ms = store.col('measurements').all();
       if (args.charId) ms = ms.filter((m) => m.charId === args.charId);
       if (args.days) ms = ms.filter((m) => m.ts >= sinceISO(args.days));
-      ms.slice(0, 60000).forEach((m) => rows.push([m.charId, m.charName, m.model, m.workshop, m.station, m.ts, m.shift, m.value, m.unit, m.batch, m.supplier, m.operator, m.vin, chars.get(m.charId)?.lsl, chars.get(m.charId)?.usl, m.subgroup]));
+      ms.slice(0, 60000).forEach((m) => rows.push([m.charId, m.charName, m.model, m.workshop, m.station, m.ts, m.shift, m.value, m.unit, m.batch, m.supplier, m.operator, m.vin, chars.get(m.charId)?.lsl, chars.get(m.charId)?.usl, m.subgroup, m.measurementSource, m.sourceMeasurementId]));
       add('测量数据', rows);
     }
     if (ds === 'spc' || ds === 'all') {

@@ -279,23 +279,24 @@ const isSme = () => !!(global.Scale && global.Scale.isSme && global.Scale.isSme(
     async render() {
       const res = await API.get('/qip-real-v3/api/projects', { limit: 300 });
       const rows = res.rows || [];
-      const open = rows.filter((r) => r.stage !== 'D8');
+      const { activeProjects, projectIsClosed, projectStageCode } = global.QBusiness;
+      const open = activeProjects(rows);
       const overdue = open.filter((r) => r.overdue);
       const aiDraft = rows.length ? Math.round(rows.filter((r) => r.aiDrafted).length / rows.length * 100) : 0;
       const tasks = global.State.bootstrap.todos || [];
-      const focus = open.filter((r) => r.stage === 'D4' || r.overdue)[0] || open[0];
+      const focus = open.filter((r) => projectStageCode(r) === 'D4' || r.overdue)[0] || open[0];
       const SLA_AI = {
         D1: '按技能图谱推荐团队', D2: '5W2H 自动成文', D3: '围堵方案库匹配（含历史有效率）', D4: '因果图 / 5Why / 数据取证 / DOE 方案',
         D5: '对策库匹配 + OA 审批流自动发起', D6: '@MES 自动采集验证数据做前后对比', D7: '五维横展清单自动生成', D8: '收益核定 + 案例自动归档',
       };
       const slaRows = isSme()
         ? PDCA_DEF.map(([k, name, color, sla]) => [k + ' ' + name, sla, PDCA_AI[k], open.filter((r) => pdcaOf(r) === k).length])
-        : STAGE_DEF.map(([k, name, sla]) => [k + ' ' + name, sla, SLA_AI[k], open.filter((r) => r.stage === k).length]);
+        : STAGE_DEF.map(([k, name, sla]) => [k + ' ' + name, sla, SLA_AI[k], open.filter((r) => projectStageCode(r) === k).length]);
       const projRows = rows.map((p) => ({
         __act: 'projectDetail', __args: { id: p.id },
-        cells: ['<b>' + esc(p.id) + '</b>', esc(p.title), tag(p.stage, p.stage === 'D8' ? 'green' : 'purple'), esc(p.owner),
+        cells: ['<b>' + esc(p.id) + '</b>', esc(p.title), tag(p.stage, projectIsClosed(p) ? 'green' : 'purple'), esc(p.owner),
           bar(p.progress, p.overdue ? '#e5484d' : '#1a56db') + '<span style="font-size:10.5px;color:#8791a5;">' + p.progress + '%</span>',
-          day(p.dueAt), p.stage === 'D8' ? tag('已关闭', 'green') : p.overdue ? tag('超期 ' + p.overdueDays + ' 天', 'red') : tag('进行中', 'blue')],
+          day(p.dueAt), projectIsClosed(p) ? tag('已关闭', 'green') : p.overdue ? tag('超期 ' + p.overdueDays + ' 天', 'red') : tag('进行中', 'blue')],
       }));
 
       return `

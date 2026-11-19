@@ -113,6 +113,34 @@ test('business modules persist actual inputs and keep approval and todo states c
     assert(workbook.sheets[0].rows.some((r)=>r.includes('实际供应商')));
     const week = await tool('report_generate',{type:'质量周报'});
     assert.match(office.zipRead(await download(week.下载链接))['word/document.xml'].toString(),/10 个在线测量点/);
+    const aging = await api('operations');
+    let c = aging.cases.find((entry) => entry.charId === 'CT-REAL');
+    const apply = async (action, extra = {}) => (await api('operations/cases/' + encodeURIComponent(c.id) + '/' + action, 'POST', { version: c.version, author: member.name, ...extra })).row;
+    c = await apply('approve');
+    await api('projects', 'POST', { title: '历史结案 A', stage: 'D8' });
+    await api('projects', 'POST', { title: '历史结案 B', stage: 'D8 结案' });
+    const countOpen = async (expected) => {
+      assert.equal((await api('kpi/overview')).kpi.KPI.在改项目, expected);
+      assert.equal((await tool('dashboard_overview', {})).KPI.在改项目, expected);
+      for (const type of ['质量周报', '质量月报']) {
+        const report = await tool('report_generate', { type });
+        const body = office.zipRead(await download(report.下载链接))['word/document.xml'].toString();
+        assert(body.includes('在改改进项目 ' + expected + ' 个'), type);
+      }
+    };
+    await countOpen(2);
+    while (c.status === 'executing') {
+      c = await apply('submit', { result: '本阶段按工作单要求完成范围核对、复检与记录整理。', evidence: '核对复检数据、批次编号及各现场记录。' });
+      c = await apply('approve');
+    }
+    assert.equal(c.status, 'close_review');
+    await countOpen(2);
+    c = await apply('approve');
+    const managed = (await api('projects/' + encodeURIComponent(c.projectId))).row;
+    assert.deepEqual([managed.status, managed.stageCode, managed.stageLabel], ['closed', 'D8', '结案']);
+    await countOpen(1);
+    const draft8d = await tool('report_generate', { type: '8D报告', projectId: c.projectId });
+    assert.match(office.zipRead(await download(draft8d.下载链接))['word/document.xml'].toString(), /采用方案版本 1/);
     await new Promise((resolve) => setTimeout(resolve,200));
     const reopened = new Store();
     await reopened.init(dir,{scale:'sme'});

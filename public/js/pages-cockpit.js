@@ -36,11 +36,11 @@
     const confirmList = P.filter((p) => stageOf(p) >= 3 && stageOf(p) <= 4)
       .concat([]);
     const needInfo = openIssues.filter((x) => !x.rootCause && !x.containment).slice(0, 4);
-    const following = P.filter((p) => !p.closedAt);
-    const overdue = P.filter((p) => p.overdue);
+    const following = global.QBusiness.activeProjects(P);
+    const overdue = following.filter((p) => p.overdue);
     const pendingReview = P.filter((p) => stageOf(p) === 5);   // D6 结果复核
-    const closing = P.filter((p) => stageOf(p) >= 6);          // D7/D8 结案
-    const closedProjects = P.filter((p) => p.closedAt || stageOf(p) >= 7);
+    const closing = following.filter((p) => stageOf(p) >= 6);          // D7/D8 结案
+    const closedProjects = P.filter(global.QBusiness.projectIsClosed);
     const autoDone = (audit.rows || []).filter((a) => a.plugin && a.plugin !== '本平台').length;
 
     return { k, K, I, P, K2: knowledge.rows || [], A: audit.rows || [], T: todos.rows || [],

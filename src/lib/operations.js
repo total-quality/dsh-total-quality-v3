@@ -56,16 +56,24 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     if (issue) Object.assign(issue, { operationsId: c.id, owner: c.owner, severity: c.risk, projectId: c.projectId || issue.projectId || '', status: c.status === 'closed' ? '已关闭' : c.status === 'executing' || c.status === 'result_review' || c.status === 'close_review' ? '整改中' : '待确认', closedAt: c.status === 'closed' ? c.closedAt : null });
     let flow = store.col('workflows').one((w) => w.operationsId === c.id);
     if (!flow) flow = store.col('workflows').insert({ operationsId: c.id, type: '质量工作单', applicant: '自动流程', relatedId: c.projectId || c.issueId });
-    Object.assign(flow, { title: c.title + ' · ' + LABELS[c.status], relatedId: c.projectId || c.issueId, status: ['plan_review', 'result_review', 'close_review'].includes(c.status) ? 'pending' : c.status === 'needs_info' ? 'returned' : c.status === 'closed' ? 'completed' : 'approved', approvers: [{ name: '管理者', status: ['plan_review', 'result_review', 'close_review'].includes(c.status) ? 'pending' : 'approved' }], content: c.plan.action });
     const t = current(c);
+    Object.assign(flow, { title: c.title + ' · ' + LABELS[c.status], relatedId: c.projectId || c.issueId, status: ['plan_review', 'result_review', 'close_review'].includes(c.status) ? 'pending' : c.status === 'needs_info' ? 'returned' : c.status === 'closed' ? 'completed' : 'approved', approvers: [{ name: '管理者', status: ['plan_review', 'result_review', 'close_review'].includes(c.status) ? 'pending' : 'approved' }], content: c.status === 'plan_review' ? c.plan.action : (t?.planAction || c.plan.action) });
     for (const todo of store.col('todos').find((v) => v.operationsId === c.id)) todo.done = !t || todo.operationTask !== t.key || c.status !== 'executing';
     if (t && c.status === 'executing' && policy().internalDispatch) {
       let todo = store.col('todos').one((v) => v.operationsId === c.id && v.operationTask === t.key);
       if (!todo) todo = store.col('todos').insert({ operationsId: c.id, operationTask: t.key, link: c.id, source: '质量运营' });
-      Object.assign(todo, { title: c.number + ' ' + t.title, user: t.owner, dueAt: t.due, priority: c.risk, done: false });
+      Object.assign(todo, { title: c.number + ' ' + t.title, user: t.owner, dueAt: t.due, priority: c.risk, instruction: t.instruction, verification: t.verification, planVersion: t.planVersion, done: false });
     }
     const project = store.col('projects').get(c.projectId);
-    if (project?.operationsId === c.id) Object.assign(project, { owner: c.owner, stageIndex: c.status === 'closed' ? 7 : [2, 3, 4, 5, 6][c.stage] || 6, stage: c.status === 'closed' ? 'D8 结案' : ['D3 围堵', 'D4 根因', 'D5 纠正', 'D6 验证', 'D7 结案复核'][c.stage], progress: c.status === 'closed' ? 100 : Math.round(c.stage / c.tasks.length * 90), closedAt: c.status === 'closed' ? c.closedAt : null, dueAt: t?.due || c.plan.due });
+    if (project?.operationsId === c.id) {
+      const closed = c.status === 'closed';
+      const stageIndex = closed ? 7 : ({ contain: 2, cause: 3, correct: 4, verify: 5 })[t?.key] ?? 6;
+      const stageCode = 'D' + (stageIndex + 1);
+      const stageLabel = ['围堵', '根因', '纠正', '验证', '结案复核', '结案'][stageIndex - 2];
+      Object.assign(project, { owner: c.owner, stageIndex, stageCode, stageLabel, stage: stageCode + ' ' + stageLabel,
+        status: closed ? 'closed' : 'open', progress: closed ? 100 : Math.round(c.stage / c.tasks.length * 90),
+        closedAt: closed ? c.closedAt : null, dueAt: t?.due || c.plan.due });
+    }
   }
   function adoptExisting() {
     tx(() => {
@@ -83,9 +91,53 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
       return clone(addCase(normalized, issue));
     });
   }
+  function preserveLegacyPlan(c) {
+    if (!c.tasks.length || c.planRevisions?.length || c.status === 'closed') return;
+    const first = c.tasks[0];
+    // Older releases persisted the first instruction but did not preserve approved verification text.
+    const legacy = { version: 1, action: first.instruction, owner: first.owner, due: first.due, legacy: true };
+    c.planRevisions = [legacy];
+    for (const task of c.tasks) task.planVersion = legacy.version;
+    for (const sub of c.submissions) sub.planVersion = legacy.version;
+  }
+  function approvePlan(c, author) {
+    const revisions = c.planRevisions ||= [];
+    const revision = { ...clone(c.plan), version: (revisions.at(-1)?.version || 0) + 1, approvedBy: author, approvedAt: clock() };
+    revisions.push(revision);
+    const steps = c.kind === 'application' ? STEPS.slice(2) : STEPS;
+    if (!c.tasks.length) c.tasks = steps.map(([key, title]) => ({ key, title }));
+    for (const [i, task] of c.tasks.entries()) {
+      if (i < c.stage || task.status === 'done') continue;
+      Object.assign(task, {
+        owner: revision.owner,
+        due: new Date(Date.parse(revision.due) + (i - c.stage) * 48 * 3600000).toISOString(),
+        status: i === c.stage ? 'active' : 'waiting',
+        planVersion: revision.version,
+        instruction: i === 0 ? revision.action : task.title + '，记录实际动作、原始证据和验证结论。',
+        planAction: revision.action,
+        verification: revision.verification,
+      });
+    }
+    c.status = 'executing';
+    c.returnNote = '';
+    c.approvedAt = revision.approvedAt;
+    c.approvedBy = author;
+    return revision.version;
+  }
   function report(c) {
     const blocks = [{ type: 'h1', text: c.title + ' · 处理报告' }, { type: 'p', text: c.number + ' / ' + c.owner + ' / ' + LABELS[c.status] }, { type: 'h2', text: '事实与来源' }, { type: 'p', text: c.description }, { type: 'p', text: '产品：' + c.product + '；批次：' + c.batch + '；工序：' + c.location }, { type: 'h2', text: '处理方案' }, { type: 'p', text: c.plan.action }];
-    for (const task of c.tasks) { blocks.push({ type: 'h2', text: task.title }); for (const s of c.submissions.filter((v) => v.taskKey === task.key)) blocks.push({ type: 'p', text: s.author + ' / ' + s.createdAt + '\n' + s.result + '\n验证：' + s.evidence + '\n复核：' + (s.acceptedBy || s.returnNote || '待复核') }); }
+    for (const revision of c.planRevisions || []) {
+      blocks.push({ type: 'h2', text: '方案版本 ' + revision.version },
+        { type: 'p', text: Business.planRevisionText(revision) });
+    }
+    for (const task of c.tasks) {
+      blocks.push({ type: 'h2', text: task.title }, { type: 'p', text: Business.taskRequirement(task) });
+      for (const s of c.submissions.filter((v) => v.taskKey === task.key)) {
+        blocks.push({ type: 'p', text: [s.author + ' / ' + s.createdAt,
+          s.planVersion ? '提交采用方案版本 ' + s.planVersion : '历史提交',
+          s.result, '验证：' + s.evidence, '复核：' + (s.acceptedBy || s.returnNote || '待复核')].join('\n') });
+      }
+    }
     blocks.push({ type: 'h2', text: '业务追溯与验证' }, { type: 'p', text: Business.businessSummary(c.business, c) });
     const buf = office.docxWrite(blocks), filename = 'operation-' + hash(c.id).slice(0, 16) + '.docx';
     fs.mkdirSync(outputDir, { recursive: true }); fs.writeFileSync(path.join(outputDir, filename), buf);
@@ -96,6 +148,7 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
   function act(id, action, input) {
     requireObject(input); const c = resolve(id); version(c, input); const author = actor(input);
     return tx(() => {
+      preserveLegacyPlan(c);
       if (action === 'plan') {
         if (!['plan_review', 'needs_info'].includes(c.status)) fail('请先取消方案批准后再调整');
         const p = input.plan || {}; requireObject(p);
@@ -113,69 +166,251 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
           if (c.missing.length) fail('请先补齐列出的资料');
           if (!people().includes(c.owner)) fail('请先指定团队责任人');
           if (Date.parse(c.plan.due) <= Date.parse(clock())) fail('方案期限已过，请调整期限');
-          const steps = c.kind === 'application' ? STEPS.slice(2) : STEPS;
-          if (!c.tasks.length) c.tasks = steps.map(([key, title], i) => ({ key, title, owner: c.owner, due: new Date(Date.parse(c.plan.due) + i * 48 * 3600000).toISOString(), status: i === 0 ? 'active' : 'waiting', instruction: i === 0 ? c.plan.action : title + '，记录实际动作、原始证据和验证结论。' }));
-          current(c).owner = c.owner; current(c).due = c.plan.due; current(c).status = 'active'; c.status = 'executing'; c.approvedBy = author; c.approvedAt = clock();
+          const approvedVersion = approvePlan(c, author);
           if (!c.projectId) { const p = store.col('projects').insert({ title: c.title, issueId: c.issueId, model: c.product, workshop: c.location, owner: c.owner, severity: c.risk, operationsId: c.id, method: '8D', stageIndex: 2, progress: 0 }); c.projectId = p.id; }
-          event(c, author + '一键批准方案，已建立执行路径与当前任务', false);
+          event(c, author + '批准方案版本 ' + approvedVersion + '，已更新当前及后续任务', false);
         } else if (c.status === 'result_review') {
           const sub = c.submissions.at(-1); if (!sub || sub.taskKey !== current(c)?.key || sub.returnNote || sub.acceptedBy) fail('当前阶段没有有效的待复核提交');
-          sub.acceptedBy = author; sub.acceptedAt = clock(); current(c).status = 'done'; c.stage++; c.status = c.stage === c.tasks.length ? 'close_review' : 'executing'; if (current(c)) current(c).status = 'active'; event(c, author + '确认执行结果，已自动推进下一步', false);
+          sub.acceptedBy = author; sub.acceptedAt = clock(); c.returnNote = ''; current(c).status = 'done'; c.stage++; c.status = c.stage === c.tasks.length ? 'close_review' : 'executing'; if (current(c)) current(c).status = 'active'; event(c, author + '确认执行结果，已自动推进下一步', false);
         } else if (c.status === 'close_review') {
           if (!c.tasks.length || !c.tasks.every((t) => t.status === 'done')) fail('执行阶段尚未完成');
           const gate = Business.assessBusiness(c.business, c); if (c.business.enforce && !gate.gateReady) fail('结案资料还需补充：' + [...gate.invalid, ...gate.missing].join('；'));
+          closeEvidence(c);
           c.status = 'closed'; c.closedAt = clock(); c.closedBy = author; event(c, author + '确认结案', false);
           if (policy().autoReport) report(c);
           if (policy().autoKnowledge && !store.col('knowledge').one((k) => k.operationsId === c.id)) { const content = c.description + '\n处理：' + c.plan.action + '\n' + c.submissions.filter((s) => s.acceptedBy).map((s) => s.result + '\n验证：' + s.evidence).join('\n'); store.col('knowledge').insert({ operationsId: c.id, issueId: c.issueId, projectId: c.projectId, title: c.title + ' · 处置经验', content, type: '经验卡', author, tags: [c.location, '已结案'].filter(Boolean), source: c.number }); event(c, '已自动整理经验卡并关联原工作单'); }
         } else fail('当前状态不可批准');
       } else if (action === 'revoke') {
-        if (c.status !== 'executing') fail('只有执行中的方案可以取消批准'); c.status = 'plan_review'; event(c, author + '取消方案批准，任务与执行历史保留', false);
+        if (c.status !== 'executing') fail('只有执行中的方案可以取消批准');
+        c.status = 'plan_review'; current(c).status = 'waiting'; event(c, author + '取消方案批准，暂停当前任务并保留执行历史', false);
       } else if (action === 'submit') {
         if (c.status !== 'executing' || !current(c)) fail('当前没有可提交的执行任务');
         const result = text(input.result, '实际执行结果', 15), evidence = text(input.evidence, '验证方式与证据', 10);
         if (/^(\d+|已完成|完成|测试|test)[。.!\s]*$/i.test(result)) fail('请填写实际动作与范围，不能仅填写占位内容');
         const who = text(input.author, '提交人', 1, 80); if (!people().includes(who)) fail('请选择已有团队成员');
         const files = input.files || []; if (!Array.isArray(files) || files.length > 8 || files.some((id) => !c.files.some((f) => f.id === id))) fail('附件不属于当前工作单');
-        c.submissions.push({ id: crypto.randomUUID(), taskKey: current(c).key, result, evidence, author: who, files, createdAt: clock() }); current(c).status = 'review'; c.status = 'result_review'; c.precheck = { checks: ['实际执行内容已填写', '验证依据已填写', '阶段与工作单一致', '提交人为团队成员'], warning: '完整性检查通过；原始记录和结果真实性仍需管理者复核。' }; event(c, who + '提交执行结果，已自动核对完整性', false);
+        c.submissions.push({ id: crypto.randomUUID(), taskKey: current(c).key, planVersion: current(c).planVersion, result, evidence, author: who, files, createdAt: clock() }); current(c).status = 'review'; c.status = 'result_review'; c.precheck = { checks: ['实际执行内容已填写', '验证依据已填写', '阶段与工作单一致', '提交人为团队成员'], warning: '完整性检查通过；原始记录和结果真实性仍需管理者复核。' }; event(c, who + '提交执行结果，已自动核对完整性', false);
       } else if (action === 'return') {
         if (c.status !== 'result_review') fail('当前没有待复核提交'); const note = text(input.note, '退回意见', 5); c.submissions.at(-1).returnNote = note; c.returnNote = note; c.status = 'executing'; current(c).status = 'active'; event(c, author + '退回补充：' + note, false);
       } else fail('不支持的工作单操作', 404);
       sync(c); return clone(c);
     });
   }
-  function batchStats(rows, ch) {
-    const values = rows.map((r) => r.value), out = values.filter((v) => v < ch.lsl || v > ch.usl).length;
-    let cpk = null, signals = 0; if (values.length >= 3) { try { cpk = stats.capability(values, ch.usl, ch.lsl).cpk; const chart = stats.chartIMR(values); signals = stats.spcRules(values, { center: chart.center, ucl: chart.ucl, lcl: chart.lcl, sigma: chart.sigmaWithin }).length; } catch (_) {} }
-    return { n: values.length, out, rate: values.length ? (values.length - out) / values.length * 100 : null, cpk: Number.isFinite(cpk) ? cpk : null, signals, min: values.reduce((a, b) => Math.min(a, b), Infinity), max: values.reduce((a, b) => Math.max(a, b), -Infinity), lsl: ch.lsl, usl: ch.usl };
+  function batchStats(rows, ch, detailed = false) {
+    const values = rows.map((r) => r.value);
+    const outliers = rows.filter((r) => r.value < ch.lsl || r.value > ch.usl);
+    const bySubgroup = new Map();
+    for (const row of rows) {
+      if (!row.subgroup) continue;
+      if (!bySubgroup.has(row.subgroup)) bySubgroup.set(row.subgroup, []);
+      bySubgroup.get(row.subgroup).push(row);
+    }
+    const subgroups = [...bySubgroup.values()];
+    const configuredSize = Number(ch.subgroupSize) || 0;
+    const size = configuredSize > 1 ? configuredSize : subgroups[0]?.length;
+    const needsGroups = configuredSize > 1 || (configuredSize === 0 && bySubgroup.size > 0);
+    const validGroups = needsGroups && size >= 2 && subgroups.length >= 2 &&
+      subgroups.every((group) => group.length === size) && subgroups.length * size === rows.length;
+    const method = validGroups ? (size > 10 ? 'X̄–S' : 'X̄–R') : 'I–MR';
+    const alarms = [], signalTypes = new Set();
+    const addRules = (chart, points, prefix, pointsAt, sigma) => {
+      const { center, ucl, lcl } = chart;
+      for (const rule of stats.spcRules(points, { center, ucl, lcl, sigma }, { includeWindows: detailed })) {
+        signalTypes.add(prefix + ':' + rule.rule);
+        if (!detailed) continue;
+        for (const [start, end] of rule.windows) {
+          const ids = [];
+          for (let i = start; i <= end; i++) ids.push(...pointsAt(i).map((r) => String(r.id)));
+          alarms.push({ key: prefix + ':' + rule.rule + ':' + hash(ids), ids, rule: rule.rule, chart: prefix, name: rule.name });
+        }
+      }
+    };
+    let sigmaWithin;
+    if (validGroups) {
+      const groupedValues = subgroups.map((group) => group.map((r) => r.value));
+      const chart = size > 10 ? stats.chartXbarS(groupedValues) : stats.chartXbarR(groupedValues);
+      sigmaWithin = chart.sigmaWithin;
+      addRules(chart.xbar, chart.xbar.points.map((v) => v.value), method, (i) => subgroups[i], sigmaWithin / Math.sqrt(size));
+      for (const { i, outOfControl } of (chart.s || chart.r).points) if (outOfControl) {
+        signalTypes.add(method + ':spread');
+        if (!detailed) continue;
+        const ids = subgroups[i].map((r) => String(r.id));
+        alarms.push({ key: 'spread:' + method + ':' + hash(ids), ids, rule: 1, chart: method, name: '组内离散超控制限' });
+      }
+    } else if (values.length >= 3) {
+      const chart = stats.chartIMR(values);
+      sigmaWithin = chart.sigmaWithin;
+      addRules(chart, values, method, (i) => [rows[i]], sigmaWithin);
+      for (let i = 0; i < chart.mr.length; i++) if (chart.mr[i] > chart.mrUcl) {
+        signalTypes.add('MR:1');
+        if (!detailed) continue;
+        const ids = [String(rows[i].id), String(rows[i + 1].id)];
+        alarms.push({ key: 'mr:' + hash(ids), ids, rule: 1, chart: 'MR', name: '移动极差超控制限' });
+      }
+    }
+    const n = values.length, out = outliers.length, signals = signalTypes.size;
+    const minSamples = Number.isSafeInteger(ch.capabilityMinSamples) && ch.capabilityMinSamples >= 25 ? ch.capabilityMinSamples : 50;
+    let capabilityStatus = 'ready', cpk = null;
+    if (n < minSamples) capabilityStatus = 'insufficient';
+    else if (needsGroups && !validGroups) capabilityStatus = 'invalid_subgroups';
+    else if (signals) capabilityStatus = 'unstable';
+    else if (!(sigmaWithin > 0)) capabilityStatus = 'no_variation';
+    else cpk = stats.capability(values, ch.usl, ch.lsl, { withinSd: sigmaWithin }).cpk;
+    const result = { n, out, rate: n ? (n - out) / n * 100 : null, cpk: Number.isFinite(cpk) ? cpk : null,
+      signals, capabilityStatus, minSamples, method, subgroupSize: validGroups ? size : null,
+      min: values.reduce((a, b) => Math.min(a, b), Infinity), max: values.reduce((a, b) => Math.max(a, b), -Infinity), lsl: ch.lsl, usl: ch.usl };
+    if (detailed) {
+      result.outlierIds = outliers.map((r) => String(r.id));
+      result.chartAlarms = alarms;
+    }
+    return result;
+  }
+  function evidenceSummary(result) {
+    const keys = [];
+    if (result.out) keys.push('超规格 ' + result.out + ' 点');
+    if (result.signals) keys.push('控制图 ' + result.signals + ' 类信号');
+    if (result.cpk !== null && result.cpk < 1) keys.push('稳定过程 Cpk ' + result.cpk.toFixed(3) + '，低于 1');
+    return keys.join('；');
+  }
+  function measurementFingerprint(rows, ch) {
+    return hash([ch.lsl, ch.usl, ch.subgroupSize, ch.capabilityMinSamples, rows.map((r) => [r.id, r.value, r.ts, r.subgroup])]);
+  }
+  function closeEvidence(c) {
+    if (!c.scanKey || !c.scanMeasurementIds || !c.measurement) return;
+    // Keep the evidence reviewed by the manager, even when a new scan is pending.
+    c.closedEvidence = {
+      measurementIds: c.scanMeasurementIds || [],
+      outlierIds: c.measurement.outlierIds || [],
+      alarmKeys: (c.measurement.chartAlarms || []).map((a) => a.key),
+    };
+  }
+  function latestEvidence(c, g) {
+    if (c.closedEvidence) return c.closedEvidence;
+    const cutoff = Date.parse(c.closedAt);
+    const historical = g.rows.filter((r) => {
+      const recordedAt = Date.parse(r.createdAt || r.ts);
+      return !Number.isFinite(recordedAt) || recordedAt <= cutoff;
+    });
+    const result = batchStats(historical, g.ch, true);
+    return c.closedEvidence = {
+      measurementIds: historical.map((r) => String(r.id)),
+      outlierIds: result.outlierIds,
+      alarmKeys: result.chartAlarms.map((a) => a.key),
+    };
+  }
+  function newEvidence(result, baseline) {
+    const known = new Set(baseline.measurementIds);
+    const outliers = new Set(baseline.outlierIds);
+    const signals = new Set(baseline.alarmKeys);
+    return {
+      outlierIds: result.outlierIds.filter((id) => !outliers.has(id)),
+      chartAlarms: result.chartAlarms.filter((a) => !signals.has(a.key) && a.ids.some((id) => !known.has(id))),
+    };
   }
   function groups() {
     const map = new Map(); for (const r of store.col('measurements').all()) { const ch = store.col('spcChars').get(r.charId); if (!ch || !Number.isFinite(r.value) || !Number.isFinite(ch.lsl) || !Number.isFinite(ch.usl) || ch.lsl >= ch.usl) continue; const key = JSON.stringify([r.charId, r.batch || '未标批次']); if (!map.has(key)) map.set(key, { key, ch, batch: r.batch || '未标批次', rows: [] }); map.get(key).rows.push(r); } return [...map.values()].map((g) => ({ ...g, rows: g.rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts))) }));
   }
-  function measurementDigest() { return hash(store.col('measurements').all().map((r) => [r.id, r.charId, r.batch, r.value, r.ts])); }
+  function measurementDigest() { return hash(store.col('measurements').all().map((r) => [r.id, r.charId, r.batch, r.value, r.ts, r.subgroup])); }
   function scan(reason = '立即筛查') {
     if (scanning) return summary(); scanning = true;
     try {
       return tx(() => {
         let created = 0, reminders = 0;
-        for (const g of groups()) { const result = batchStats(g.rows, g.ch); if (!result.out && !result.signals && !(result.cpk !== null && result.cpk < 1)) continue;
-          let c = store.col('operationCases').one((v) => v.scanKey === g.key && v.status !== 'closed') || store.col('operationCases').all().filter((v) => v.scanKey === g.key).at(-1);
-          const fingerprint = hash(g.rows.map((r) => [r.id, r.value, r.ts]));
-          if (!c || (c.status === 'closed' && c.measurementFingerprint !== fingerprint)) {
-            const issue = store.col('issues').insert({ title: g.ch.name + ' · ' + g.batch + ' 测量异常', description: result.n + ' 个测量点，超规格 ' + result.out + ' 点；规格 ' + g.ch.lsl + '～' + g.ch.usl + '。测量点数不等于产品不良件数。', model: g.ch.model, workshop: g.ch.workshop, batch: g.batch, owner: g.ch.owner, severity: result.out / result.n > 0.1 ? 'A' : 'B', source: '测量筛查', status: '待确认' });
-            c = addCase({ source: '测量筛查', refs: [g.ch.id, '批次 ' + g.batch] }, issue); c.scanKey = g.key; created++;
+        const casesByBatch = new Map();
+        for (const c of store.col('operationCases').all()) {
+          if (c.scanKey) {
+            const prior = casesByBatch.get(c.scanKey);
+            if (!prior || prior.status === 'closed') casesByBatch.set(c.scanKey, c);
           }
-          if (c.measurementFingerprint !== fingerprint) { c.measurementFingerprint = fingerprint; c.measurement = result; c.charId = g.ch.id; event(c, '测量证据已更新，等待按当前阶段核对'); }
+        }
+        for (const g of groups()) {
+          let c = casesByBatch.get(g.key);
+          const fingerprint = measurementFingerprint(g.rows, g.ch);
+          if (fingerprint === c?.measurementFingerprint || fingerprint === c?.measurementTrace?.fingerprint) continue;
+          const result = batchStats(g.rows, g.ch, true);
+          const previous = c?.status === 'closed' ? c : null;
+          const recurrence = previous ? newEvidence(result, latestEvidence(previous, g)) : null;
+          if (previous) {
+            previous.measurementTrace = { fingerprint, n: result.n, out: result.out, signals: result.signals, updatedAt: clock() };
+            if (!recurrence.outlierIds.length && !recurrence.chartAlarms.length) continue;
+          } else if (!c && !evidenceSummary(result)) continue;
+          if (!c || previous) {
+            const reason = recurrence
+              ? ['新增超规格 ' + recurrence.outlierIds.length + ' 点', '新增控制图信号 ' + recurrence.chartAlarms.length + ' 条'].join('，')
+              : evidenceSummary(result);
+            const description = reason + '。批次共 ' + result.n + ' 个测量点，规格 ' + g.ch.lsl + '～' + g.ch.usl +
+              '。测量点数不等于产品不良件数。' + (previous ? ' 前次工作单 ' + previous.number + '。' : '');
+            const issue = store.col('issues').insert({ title: g.ch.name + ' · ' + g.batch + ' 测量异常', description, model: g.ch.model,
+              workshop: g.ch.workshop, batch: g.batch, owner: g.ch.owner, severity: result.out / result.n > 0.1 ? 'A' : 'B', source: '测量筛查', status: '待确认' });
+            c = addCase({ source: '测量筛查', refs: [g.ch.id, '批次 ' + g.batch] }, issue);
+            c.scanKey = g.key;
+            if (previous) {
+              c.previousCaseId = previous.id;
+              c.recurrence = recurrence;
+              previous.followUpCaseIds = [...new Set([...(previous.followUpCaseIds || []), c.id])];
+            }
+            created++;
+          }
+          c.measurementFingerprint = fingerprint;
+          c.measurement = result;
+          c.scanMeasurementIds = g.rows.map((r) => String(r.id));
+          c.charId = g.ch.id;
+          event(c, '测量证据已更新，等待按当前阶段核对');
         }
         for (const c of store.col('operationCases').all()) if (c.status === 'executing' && current(c) && Date.parse(current(c).due) < Date.parse(clock()) && (!c.remindedAt || Date.parse(clock()) - Date.parse(c.remindedAt) >= policy().reminderHours * 3600000)) { c.remindedAt = clock(); event(c, current(c).owner + '的任务已超期，已记录站内催办'); reminders++; }
         store.db.meta.operationsLastScan = clock(); store.db.meta.operationsLastResult = { created, reminders, reason }; measurementMark = measurementDigest(); event(null, reason + '完成：新增 ' + created + ' 条异常，新增 ' + reminders + ' 条站内催办'); return { created, reminders, ...summary() };
       });
     } finally { scanning = false; }
   }
+  function findChar(r) {
+    if (r.charId) return store.col('spcChars').get(r.charId);
+    return store.col('spcChars').one((v) => v.name === r.name && v.lsl === r.lsl && v.usl === r.usl &&
+      (v.workshop || '') === r.location && (v.model || '') === r.product && (v.station || '') === r.station);
+  }
+  function priorImport(p) {
+    return store.col('operationImports').one((r) => r.fingerprint === p.fingerprint ||
+      (p.legacyFingerprint && r.fingerprint === p.legacyFingerprint));
+  }
+  function importChecks(rows) {
+    const measurements = store.col('measurements').all();
+    const bySource = new Map(), byReading = new Map();
+    const readingKey = (r) => JSON.stringify([r.charId, r.batch, r.value]);
+    const sourceKey = (r) => JSON.stringify([r.measurementSource, r.sourceMeasurementId]);
+    for (const m of measurements) {
+      if (m.sourceMeasurementId) bySource.set(sourceKey(m), m);
+      const key = readingKey(m);
+      if (!byReading.has(key)) byReading.set(key, []);
+      byReading.get(key).push(m);
+    }
+    const matched = new Set(), checks = [];
+    const context = ['station', 'shift', 'supplier', 'operator', 'vin', 'subgroup'];
+    for (const [index, row] of rows.entries()) {
+      const r = { ...row, charId: findChar(row)?.id || row.charId || JSON.stringify([row.name, row.lsl, row.usl, row.location, row.product, row.station]),
+        ts: row.ts ? new Date(row.ts).toISOString() : '', sourceTimeKnown: !!row.ts };
+      const agrees = (m) => readingKey(m) === readingKey(r) &&
+        (!r.ts || m.sourceTimeKnown === false || !m.ts || Date.parse(m.ts) === Date.parse(r.ts)) &&
+        context.every((k) => !r[k] || !m[k] || r[k] === m[k]);
+      const item = { row: index + 1, name: r.name, batch: r.batch, ts: r.ts, value: r.value, sourceId: r.sourceMeasurementId };
+      if (r.sourceMeasurementId) {
+        const key = sourceKey(r), existing = bySource.get(key);
+        if (existing) checks.push({ ...item, state: agrees(existing) ? 'duplicate' : 'conflict', matchedId: existing.id || '' });
+        else bySource.set(key, r);
+      } else {
+        const existing = byReading.get(readingKey(r))?.find((m) =>
+          !matched.has(m.id) && (!r.measurementSource || !m.measurementSource || r.measurementSource === m.measurementSource) && agrees(m));
+        if (existing) {
+          checks.push({ ...item, state: 'possible', matchedId: existing.id });
+          matched.add(existing.id);
+        }
+      }
+    }
+    return checks;
+  }
   function preview(input) {
     requireObject(input); const filename = text(input.filename, '文件名', 1, 160); let data = input.rows;
     if (data === undefined) { if (typeof input.base64 !== 'string' || input.base64.length > 7500000) fail('文件须小于 5 MB'); const bytes = Buffer.from(input.base64, 'base64'); if (bytes.length > 5 * 1024 * 1024) fail('文件须小于 5 MB'); if (/\.json$/i.test(filename)) { try { const j = JSON.parse(bytes.toString('utf8')); data = Array.isArray(j) ? j : j.measurements; } catch (_) { fail('JSON 格式无效'); } } else { const sheets = /\.csv$/i.test(filename) ? [{ rows: parseCsv(bytes.toString('utf8')) }] : /\.xlsx$/i.test(filename) ? office.xlsxRead(bytes).sheets : null; if (!sheets) fail('请上传 CSV、JSON 或 XLSX'); const matrix = sheets[0]?.rows; if (!matrix?.length) fail('文件没有数据'); const header = matrix[0].map((v) => String(v ?? '').replace(/^\uFEFF/, '').trim()); if (new Set(header).size !== header.length || header.some((v) => !v)) fail('表头不可为空或重复'); data = matrix.slice(1).filter((r) => r.some((v) => v != null && String(v).trim())).map((r, i) => { if (r.length !== header.length) fail('第 ' + (i + 2) + ' 行列数与表头不一致'); return Object.fromEntries(header.map((h, n) => [h, r[n]])); }); } }
     if (!Array.isArray(data) || !data.length || data.length > 5000) fail('一次接收 1～5000 条测量记录');
-    const aliases = { charId: ['charId', '特性编号'], name: ['name', 'charName', '特性名称', '特性'], value: ['value', '测量值', '实测值'], lsl: ['lsl', '下限', '规格下限'], usl: ['usl', '上限', '规格上限'], batch: ['batch', '批次', '批号'], location: ['location', 'workshop', '车间', '工序'], station: ['station', '工位'], shift: ['shift', '班次'], supplier: ['supplier', '供应商'], operator: ['operator', '操作者', '检验员'], vin: ['vin', 'VIN', '车架号'], subgroup: ['subgroup', '子组'], product: ['product', 'model', '产品'], owner: ['owner', '责任人'], unit: ['unit', '单位'], ts: ['ts', '时间', '测量时间'] };
+    const aliases = { charId: ['charId', '特性编号'], name: ['name', 'charName', '特性名称', '特性'], value: ['value', '测量值', '实测值'], lsl: ['lsl', '下限', '规格下限'], usl: ['usl', '上限', '规格上限'], batch: ['batch', '批次', '批号'], location: ['location', 'workshop', '车间', '工序'], station: ['station', '工位'], shift: ['shift', '班次'], supplier: ['supplier', '供应商'], operator: ['operator', '操作者', '检验员'], vin: ['vin', 'VIN', '车架号'], subgroup: ['subgroup', '子组'], product: ['product', 'model', '产品'], owner: ['owner', '责任人'], unit: ['unit', '单位'], ts: ['ts', '时间', '测量时间'], measurementSource: ['measurementSource', 'source', '测量来源'], sourceMeasurementId: ['sourceMeasurementId', 'sourceId', '源测量编号'] };
     const rows = data.map((row, i) => {
       requireObject(row);
       const r = {};
@@ -188,40 +423,79 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
       if (r.lsl >= r.usl) fail('规格下限须小于上限');
       if (ch && (r.lsl !== ch.lsl || r.usl !== ch.usl)) fail('已有特性的规格不一致，请核对或使用新特性编号');
       r.batch = text(String(r.batch ?? ''), '第 ' + (i + 1) + ' 行批次', 1, 100);
-      for (const k of ['charId', 'location', 'station', 'shift', 'supplier', 'operator', 'vin', 'subgroup', 'product', 'owner', 'unit', 'ts']) r[k] = text(String(r[k] ?? ''), k, 0, 100);
+      for (const k of ['charId', 'location', 'station', 'shift', 'supplier', 'operator', 'vin', 'subgroup', 'product', 'owner', 'unit', 'ts', 'measurementSource', 'sourceMeasurementId']) r[k] = text(String(r[k] ?? ''), k, 0, 100);
       if (r.ts && !Number.isFinite(Date.parse(r.ts))) fail('第 ' + (i + 1) + ' 行时间无效');
+      if (r.sourceMeasurementId && !r.measurementSource) r.measurementSource = '默认';
       return r;
     });
     const standards = new Map(); for (const r of rows) { const key = r.charId || r.name; const spec = JSON.stringify([r.lsl, r.usl]); if (standards.has(key) && standards.get(key) !== spec) fail('同一特性的规格限不一致'); standards.set(key, spec); }
     for (const [key, p] of previews) if (Date.parse(clock()) - p.at > 900000) previews.delete(key);
     if (previews.size >= 20) previews.delete(previews.keys().next().value);
-    const id = crypto.randomUUID(), fingerprint = hash(rows.map((r) => JSON.stringify(r)).sort()); previews.set(id, { rows, filename, fingerprint, at: Date.parse(clock()) });
-    return { id, count: rows.length, preview: rows.slice(0, 8), out: rows.filter((r) => r.value < r.lsl || r.value > r.usl).length, duplicate: !!store.col('operationImports').one((r) => r.fingerprint === fingerprint) };
+    const id = crypto.randomUUID(), fingerprint = hash(rows.map((r) => JSON.stringify(r)).sort());
+    const legacyFingerprint = rows.every((r) => !r.measurementSource && !r.sourceMeasurementId)
+      ? hash(rows.map(({ measurementSource, sourceMeasurementId, ...r }) => JSON.stringify(r)).sort()) : null;
+    const entry = { rows, filename, fingerprint, legacyFingerprint, at: Date.parse(clock()) };
+    const duplicate = !!priorImport(entry);
+    const checks = duplicate ? [] : importChecks(rows);
+    entry.checkFingerprint = hash(checks);
+    previews.set(id, entry);
+    return { id, count: rows.length, preview: rows.slice(0, 8), out: rows.filter((r) => r.value < r.lsl || r.value > r.usl).length,
+      duplicate, checks };
   }
   function accept(input) {
-    const p = previews.get(input.previewId); if (!p || Date.parse(clock()) - p.at > 900000) fail('导入预览已过期，请重新预检');
+    requireObject(input);
+    const p = previews.get(input.previewId);
+    if (!p || Date.parse(clock()) - p.at > 900000) fail('导入预览已过期，请重新预检');
     const result = tx(() => {
-      const prior = store.col('operationImports').one((r) => r.fingerprint === p.fingerprint); if (prior) return { imported: 0, skipped: p.rows.length, duplicate: true, importId: prior.id };
-      const at = clock();
-      for (const r of p.rows) {
-        let ch = r.charId && store.col('spcChars').get(r.charId);
-        if (ch && (r.lsl !== ch.lsl || r.usl !== ch.usl)) fail('特性规格在预检后已变化，请重新预检', 409);
-        if (!ch && !r.charId) ch = store.col('spcChars').one((v) => v.name === r.name && v.lsl === r.lsl && v.usl === r.usl &&
-          v.workshop === r.location && v.model === r.product && (v.station || '') === r.station);
-        if (!ch) ch = store.col('spcChars').insert({ ...(r.charId ? { id: r.charId } : {}), name: r.name, lsl: r.lsl, usl: r.usl,
-          model: r.product, workshop: r.location, station:r.station, owner: owner(r.owner), unit: r.unit });
-        store.col('measurements').insert({ charId: ch.id, charName: ch.name, value: r.value, batch: r.batch, model: r.product || ch.model,
-          workshop: r.location || ch.workshop, station:r.station || ch.station || '', shift:r.shift, supplier:r.supplier,
-          operator:r.operator, vin:r.vin, ...(r.subgroup ? {subgroup:r.subgroup} : {}), unit: r.unit || ch.unit,
-          ts: r.ts ? new Date(r.ts).toISOString() : at, source: '运营导入' });
+      const prior = priorImport(p);
+      if (prior) return { imported: 0, skipped: p.rows.length, duplicate: true, importId: prior.id };
+      const checks = importChecks(p.rows);
+      if (hash(checks) !== p.checkFingerprint) fail('预检后相关测量已更新，请重新预检', 409);
+      if (checks.some((row) => row.state === 'conflict')) fail('相同来源和编号的测量内容不一致，请核对冲突行', 409);
+      const decisions = input.duplicateDecisions || {};
+      requireObject(decisions);
+      if (checks.some((row) => row.state === 'possible' && !['skip', 'keep'].includes(decisions[row.row]))) {
+        fail('请逐行确认疑似重复测量，选择保留或跳过', 409);
       }
-      const rec = store.col('operationImports').insert({ filename: p.filename, fingerprint: p.fingerprint, count: p.rows.length, at }); event(null, '已接收 ' + p.filename + '，共 ' + p.rows.length + ' 条测量'); return { imported: p.rows.length, skipped: 0, importId: rec.id };
+      const skip = new Set(checks.filter((r) => r.state === 'duplicate' ||
+        (r.state === 'possible' && decisions[r.row] === 'skip')).map((r) => r.row));
+      const at = clock();
+      for (const [index, r] of p.rows.entries()) {
+        if (skip.has(index + 1)) continue;
+        let ch = findChar(r);
+        if (ch && (r.lsl !== ch.lsl || r.usl !== ch.usl)) fail('特性规格在预检后已变化，请重新预检', 409);
+        if (!ch) ch = store.col('spcChars').insert({ ...(r.charId ? { id: r.charId } : {}), name: r.name, lsl: r.lsl, usl: r.usl,
+          model: r.product, workshop: r.location, station: r.station, owner: owner(r.owner), unit: r.unit });
+        store.col('measurements').insert({ charId: ch.id, charName: ch.name, value: r.value, batch: r.batch, model: r.product || ch.model,
+          workshop: r.location || ch.workshop, station: r.station || ch.station || '', shift: r.shift, supplier: r.supplier,
+          operator: r.operator, vin: r.vin, ...(r.subgroup ? { subgroup: r.subgroup } : {}), unit: r.unit || ch.unit,
+          ...(r.sourceMeasurementId ? { sourceMeasurementId: r.sourceMeasurementId } : {}),
+          ...(r.measurementSource ? { measurementSource: r.measurementSource } : {}),
+          sourceTimeKnown: !!r.ts, ts: r.ts ? new Date(r.ts).toISOString() : at, createdAt: at, source: '运营导入' });
+      }
+      const imported = p.rows.length - skip.size;
+      const rec = store.col('operationImports').insert({ filename: p.filename, fingerprint: p.fingerprint, count: imported, skipped: skip.size, at });
+      event(null, '已接收 ' + p.filename + '，新增 ' + imported + ' 条测量，跳过 ' + skip.size + ' 条');
+      return { imported, skipped: skip.size, duplicate: imported === 0, importId: rec.id };
     });
-    if (!result.duplicate && policy().enabled) scan('导入即时筛查'); return result;
+    if (result.imported && policy().enabled) scan('导入即时筛查');
+    return result;
   }
   function summary() {
     const cases = store.col('operationCases').all(); const counts = Object.fromEntries(Object.keys(LABELS).map((s) => [s, cases.filter((c) => c.status === s).length]));
-    return { cases: clone(cases.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))), counts, labels: LABELS, people: people(), policy: policy(), lastScan: store.db.meta.operationsLastScan || null, nextScan: store.db.meta.operationsLastScan ? new Date(Date.parse(store.db.meta.operationsLastScan) + policy().scanHours * 3600000).toISOString() : null, events: clone(events().all().slice(-25).reverse()), imports: clone(store.col('operationImports').all().slice(-20).reverse()), revision: hash([cases.map((c) => [c.id, c.version]), store.db.meta.operationsLastScan, events().all().length]), batches: groups().map((g) => ({ name: g.ch.name, charId: g.ch.id, batch: g.batch, ...batchStats(g.rows, g.ch) })) };
+    return { cases: clone(cases.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))), counts, labels: LABELS, people: people(), policy: policy(), lastScan: store.db.meta.operationsLastScan || null, nextScan: store.db.meta.operationsLastScan ? new Date(Date.parse(store.db.meta.operationsLastScan) + policy().scanHours * 3600000).toISOString() : null, events: clone(events().all().slice(-25).reverse()), imports: clone(store.col('operationImports').all().slice(-20).reverse()), revision: hash([cases.map((c) => [c.id, c.version]), store.db.meta.operationsLastScan, events().all().length]), batches: groups().map((g) => ({ name: g.ch.name, charId: g.ch.id, batch: g.batch, configuredSubgroupSize: Number(g.ch.subgroupSize) || 0, ...batchStats(g.rows, g.ch) })) };
+  }
+  function setCapability(id, input) {
+    requireObject(input);
+    const minSamples = numeric(input.minSamples, '能力最低样本量');
+    const subgroupSize = numeric(input.subgroupSize, '每组样本量');
+    if (!Number.isSafeInteger(minSamples) || minSamples < 25 || minSamples > 5000) fail('能力最低样本量须为 25～5000 的整数');
+    if (!Number.isSafeInteger(subgroupSize) || subgroupSize < 0 || subgroupSize > 50) fail('每组样本量须为 0～50 的整数');
+    const ch = store.col('spcChars').get(id);
+    if (!ch) fail('测量特性不存在', 404);
+    tx(() => store.col('spcChars').update(ch.id, { capabilityMinSamples: minSamples, subgroupSize }));
+    if (policy().enabled) scan('能力筛查设置更新');
+    return clone(ch);
   }
   function setPolicy(input) {
     requireObject(input); const p = policy(); for (const k of ['enabled', 'autoDraft', 'internalDispatch', 'autoReport', 'autoKnowledge']) { if (input[k] !== undefined && typeof input[k] !== 'boolean') fail('策略开关须为布尔值'); if (input[k] !== undefined) p[k] = input[k]; }
@@ -330,6 +604,6 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     unsubscribe = store.on(() => { const missing = store.col('issues').all().some((i) => i.status !== '已关闭' && !store.col('operationCases').get(i.id)); const pending = !worker && runtime.model && store.col('operationCases').all().some((c) => c.ai?.status === 'queued' && (policy().autoDraft || c.ai.manual)); if ((!missing && !pending && (!policy().enabled || measurementMark === measurementDigest())) || wake) return; wake = setTimeout(() => { wake = null; try { if (missing) adoptExisting(); if (policy().enabled && measurementMark !== measurementDigest()) scan('数据变化筛查'); pump().catch((e) => console.error('[operations] ' + e.message)); } catch (e) { console.error('[operations] ' + e.message); } }, 150); wake.unref?.(); });
   }
   function stop() { stopped = true; clearInterval(timer); clearTimeout(wake); wake = null; modelAbort?.abort(); unsubscribe?.(); unsubscribe = null; }
-  return { start, stop, summary, resolve, create, act, scan, preview, accept, setPolicy, policy, report, adoptExisting, analyze, editAnalysis, pump, requestDraft, addFile, getFile, business: Business, labels: LABELS };
+  return { start, stop, summary, resolve, create, act, scan, preview, accept, setCapability, setPolicy, policy, report, adoptExisting, analyze, editAnalysis, pump, requestDraft, addFile, getFile, business: Business, labels: LABELS };
 }
 module.exports = { createEngine, LABELS, DEFAULT_POLICY, parseCsv };

@@ -117,6 +117,162 @@ test('a persistence failure rolls back the work order, issue and business counte
   assert(engine.create(input).id);
 });
 
+
+function approve(engine, c, author = '李工') {
+  return engine.act(c.id, 'approve', { version: c.version, author });
+}
+function closeCase(engine, c) {
+  c = approve(engine, c);
+  while (c.status === 'executing') c = approve(engine, submit(engine, c));
+  return approve(engine, c);
+}
+
+test('new plan versions reach waiting and current tasks while completed stages keep approved text', async (t) => {
+  const { engine, store } = await fixture(t);
+  const sample = '先隔离受影响库存，再按每批 3 件进行抽检。';
+  const full = '核对隔离边界，并对受影响的全部库存逐件全检。';
+  const fullVerification = '核对百分之百复检明细和所有不合格件的处置记录。';
+  const editPlan = (c, action, verification) => engine.act(c.id, 'plan', {
+    version: c.version, author: '李工', plan: { ...c.plan, action, verification },
+  });
+  let c = approve(engine, editPlan(engine.create(input), sample, '抽查三件测量记录并核对隔离数量。'));
+  assert.equal(c.tasks[0].instruction, sample);
+  c = engine.act(c.id, 'revoke', { version: c.version });
+  c = approve(engine, editPlan(c, full, fullVerification));
+  assert.equal(c.planRevisions[0].action, sample);
+  assert.equal(c.tasks[0].instruction, full);
+  assert(c.tasks.every((task) => task.planVersion === 2 && task.verification === fullVerification));
+  const todo = store.col('todos').one((row) => row.operationsId === c.id && !row.done);
+  assert.equal(todo.instruction, full);
+  assert.equal(todo.planVersion, 2);
+  c = approve(engine, submit(engine, c));
+  assert.equal(c.submissions.at(-1).planVersion, 2);
+
+  c = engine.act(c.id, 'revoke', { version: c.version });
+  const cause = '更换定位基准后对照原工装，并采用同一量规验证原因。';
+  c = approve(engine, editPlan(c, cause, '保存新旧定位基准的复测结果和量具编号。'));
+  assert.deepEqual(c.tasks.map((task) => task.planVersion), [2, 3, 3, 3]);
+  assert.equal(c.tasks[0].instruction, full);
+  assert.equal(c.tasks[1].planAction, cause);
+  while (c.status === 'executing') c = approve(engine, submit(engine, c));
+  c = approve(engine, c);
+  const office = require('../src/lib/office');
+  const report = office.zipReadFile(store.col('reports').get(c.reportId).path)['word/document.xml'].toString();
+  for (const expected of [sample, full, fullVerification, cause, '采用方案版本 2', '采用方案版本 3']) {
+    assert(report.includes(expected), expected);
+  }
+});
+
+test('rolling measurement ledgers reconcile identifiers and allow independent unnumbered repeats', async (t) => {
+  const { engine, store, dir } = await fixture(t);
+  const row = { name: '内径', batch: 'rolling', lsl: 9, usl: 11, value: 10, ts: '2026-11-18T10:00:00Z' };
+  const numbered = [1, 2, 3].map((n) => ({ ...row, source: '产线台账', sourceId: 'M-' + n }));
+  const preview = (rows) => engine.preview({ filename: 'rolling.json', rows });
+  const receive = (rows, duplicateDecisions) => engine.accept({ previewId: preview(rows).id, duplicateDecisions });
+  assert.equal(receive(numbered).imported, 3);
+  assert.equal(receive([...numbered].reverse()).imported, 0);
+  const extended = preview([...numbered, { ...row, source: '产线台账', sourceId: 'M-4' }]);
+  assert.deepEqual(extended.checks.map((r) => r.state), ['duplicate', 'duplicate', 'duplicate']);
+  assert.equal(engine.accept({ previewId: extended.id }).imported, 1);
+  assert.equal(receive([{ ...row, source: '复测台账', sourceId: 'M-1' }]).imported, 1);
+  const collision = preview([{ ...numbered[0], value: 10.1 }, { ...row, source: '产线台账', sourceId: 'M-5' }]);
+  assert.equal(collision.checks[0].state, 'conflict');
+  assert.throws(() => engine.accept({ previewId: collision.id }), /内容不一致/);
+  assert.equal(store.col('measurements').count(), 5);
+
+  const legacy = [1, 2, 3].map((hour) => ({ ...row, batch: 'old', ts: '2026-11-18T0' + hour + ':00:00Z' }));
+  assert.equal(receive(legacy).imported, 3);
+  const rolling = preview([...legacy, { ...legacy[0], ts: '2026-11-18T04:00:00Z' }]);
+  assert.deepEqual(rolling.checks.map((r) => r.row), [1, 2, 3]);
+  assert.throws(() => engine.accept({ previewId: rolling.id }), /逐行确认/);
+  assert.equal(engine.accept({ previewId: rolling.id, duplicateDecisions: { 1: 'skip', 2: 'skip', 3: 'skip' } }).imported, 1);
+  assert.equal(receive([legacy[0]], { 1: 'keep' }).imported, 1);
+
+  const reopened = new Store();
+  await reopened.init(dir, { scale: 'sme' });
+  assert.equal(reopened.col('measurements').find((r) => r.measurementSource === '产线台账').length, 4);
+  assert.equal(reopened.col('measurements').find((r) => r.batch === 'old' && r.ts === '2026-11-18T01:00:00.000Z').length, 2);
+  reopened.persist.close();
+});
+
+test('numbered conflicts within the same upload and stale duplicate decisions do not write partially', async (t) => {
+  const { engine, store } = await fixture(t);
+  const row = { name: '内径', batch: 'rolling', lsl: 9, usl: 11, value: 10, ts: '2026-11-18T10:00:00Z' };
+  const preview = (rows) => engine.preview({ filename: 'rolling.json', rows });
+  const first = preview([{ ...row, sourceId: '1' }, { ...row, sourceId: '1', value: 10.1 }]);
+  assert.equal(first.checks[0].state, 'conflict');
+  assert.throws(() => engine.accept({ previewId: first.id }), /内容不一致/);
+  assert.equal(store.col('measurements').count(), 0);
+
+  const p = preview([row, { ...row, value: 10.2 }]);
+  engine.accept({ previewId: preview([row]).id });
+  assert.throws(() => engine.accept({ previewId: p.id }), /重新预检/);
+  assert.equal(store.col('measurements').count(), 1);
+});
+
+test('post-closure in-spec evidence only updates trace; new control signal creates one linked case', async (t) => {
+  const { engine, store } = await fixture(t);
+  const row = { name: '内径', batch: 'post-close', lsl: 9, usl: 11 };
+  const receive = (samples, offset) => {
+    const rows = samples.map((value, i) => ({ ...row, value, sourceId: String(offset + i),
+      ts: new Date(Date.UTC(2026, 10, 18, 0, offset + i)).toISOString() }));
+    return engine.accept({ previewId: engine.preview({ filename: 'measure.json', rows }).id });
+  };
+  receive([11.2], 0);
+  const closed = closeCase(engine, engine.summary().cases[0]);
+  assert.equal(closed.closedEvidence.outlierIds.length, 1);
+  receive([9.9], 1);
+  const archived = engine.resolve(closed.id);
+  assert.equal(engine.summary().cases.length, 1);
+  assert.equal(archived.measurement.n, 1);
+  assert.equal(archived.measurementTrace.n, 2);
+  receive([10, 10.1, 10.2, 10.3, 10.4, 10.5], 2);
+  engine.scan();
+  engine.scan();
+  const created = engine.summary().cases.filter((c) => c.id !== closed.id);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].previousCaseId, closed.id);
+  assert.equal(created[0].recurrence.outlierIds.length, 0);
+  assert(created[0].recurrence.chartAlarms.some((a) => a.rule === 3));
+  assert.equal(store.col('operationCases').get(closed.id).followUpCaseIds[0], created[0].id);
+});
+
+test('capability requires sufficient stable data and a valid estimate; true specification exceedance is immediate', async (t) => {
+  const { engine } = await fixture(t);
+  const row = { charId: 'CT-TEST', name: '内径', lsl: 9, usl: 11 };
+  const receive = (rows) => engine.accept({ previewId: engine.preview({ filename: 'capability.json', rows }).id });
+  receive([9.1, 10, 10.9].map((value) => ({ ...row, batch: 'small', value })));
+  let d = engine.summary();
+  assert.equal(d.cases.length, 0);
+  assert.equal(d.batches[0].capabilityStatus, 'insufficient');
+  assert.equal(d.batches[0].minSamples, 50);
+  assert.equal(d.batches[0].cpk, null);
+  receive([{ ...row, batch: 'one', value: 11.3 }]);
+  assert.equal(engine.summary().cases.length, 1);
+  assert.equal(engine.summary().cases[0].measurement.out, 1);
+
+  engine.setCapability('CT-TEST', { minSamples: 25, subgroupSize: 3 });
+  assert.throws(() => engine.setCapability('CT-TEST', { minSamples: 3, subgroupSize: 1 }), /25/);
+  const means = [10, 10.04, 9.99, 9.96, 10.02, 10.01, 9.98, 10.03, 9.97];
+  const triples = (batch, groups, range) => groups.flatMap((mean, i) =>
+    [-range, 0, range].map((delta) => ({ ...row, batch, subgroup: String(i + 1), value: mean + delta })));
+  receive(triples('groups', means, 0.6));
+  d = engine.summary();
+  const grouped = d.batches.find((b) => b.batch === 'groups');
+  assert.equal(grouped.method, 'X̄–R');
+  assert.equal(grouped.capabilityStatus, 'ready');
+  assert.equal(grouped.n, 27);
+  assert(grouped.cpk > 0.4 && grouped.cpk < 0.6);
+  assert(d.cases.some((c) => c.batch === 'groups' && c.description.includes('Cpk')));
+  receive(triples('partial', means, 0.1).slice(1));
+  assert.equal(engine.summary().batches.find((b) => b.batch === 'partial').capabilityStatus, 'invalid_subgroups');
+  receive(triples('unstable', [10, 10.04, 10.09, 10.14, 10.19, 10.24, 10.29, 10.34, 10.39], 0.3));
+  const unstable = engine.summary().batches.find((b) => b.batch === 'unstable');
+  assert.equal(unstable.capabilityStatus, 'unstable');
+  assert(unstable.signals > 0);
+  assert.equal(unstable.cpk, null);
+});
+
 test('analysis modes save provenance and fall back without leaking tool-protocol JSON', async (t) => {
   const { engine, store } = await fixture(t, { model: { model: 'test' }, llm: { complete: async () => ({ text: '{"thought":"bad","tool":"fake"}' }) } });
   const c = engine.create(input);

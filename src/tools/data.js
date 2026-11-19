@@ -1,4 +1,5 @@
 'use strict';
+const { projectIsClosed } = require('../lib/business');
 /** 数据类工具：@MES / @SPC / @ERP / @AQI —— 全部真实查询本地数据仓，不编造数字 */
 const { define } = require('./registry');
 const store = require('../lib/store');
@@ -495,7 +496,7 @@ define({
       });
     }
     // 3) 超期项目
-    const overdue = store.col('projects').find((p) => p.overdue && p.stage !== 'D8');
+    const overdue = store.col('projects').find((p) => p.overdue && !projectIsClosed(p));
     if (overdue.length) {
       risks.push({ 风险源: '改进项目管理', 对象: overdue.map((p) => p.id).join('、'), 等级: 'A', 描述: overdue.length + ' 个改进项目超期未关闭', 数据支撑: overdue.map((p) => p.id + ' 逾期 ' + p.overdueDays + ' 天').join('；'), 建议动作: '升级厂级 QRQC 并抄送科长' });
     }

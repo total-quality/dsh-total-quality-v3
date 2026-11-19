@@ -56,7 +56,7 @@ const docsTools = require('./src/tools/docs');
 const runtime = { llm: null, model: null };
 function setRuntime(next) { Object.assign(runtime, next || {}); }
 const operations = require('./src/lib/operations').createEngine({ store, outputDir: OUTPUT_DIR, runtime });
-registry.define({ name: 'operations_overview', plugin: '质量运营', label: '质量运营待办与流程总览', description: '读取当前待确认方案、执行任务、复核与结案状态。询问今天最该处理什么、谁负责、何时完成时优先查询。只读取本机实际记录。', parameters: {type:'object',properties:{}}, run() { const d = operations.summary(); return {ok:true,counts:d.counts,policy:d.policy,lastScan:d.lastScan,cases:d.cases.filter((c)=>c.status!=='closed').map((c)=>({id:c.id,title:c.title,status:d.labels[c.status],owner:c.owner,due:c.tasks[c.stage]?.due||c.plan.due,next:c.tasks[c.stage]?.instruction||c.plan.action,verification:c.plan.verification,issueId:c.issueId,projectId:c.projectId}))}; } });
+registry.define({ name: 'operations_overview', plugin: '质量运营', label: '质量运营待办与流程总览', description: '读取当前待确认方案、执行任务、复核与结案状态。询问今天最该处理什么、谁负责、何时完成时优先查询。只读取本机实际记录。', parameters: {type:'object',properties:{}}, run() { const d = operations.summary(); return {ok:true,counts:d.counts,policy:d.policy,lastScan:d.lastScan,cases:d.cases.filter((c)=>c.status!=='closed').map((c)=>({id:c.id,title:c.title,status:d.labels[c.status],owner:c.owner,due:c.tasks[c.stage]?.due||c.plan.due,next:c.tasks[c.stage]?.instruction||c.plan.action,verification:c.tasks[c.stage]?.verification||c.plan.verification,planVersion:c.tasks[c.stage]?.planVersion,issueId:c.issueId,projectId:c.projectId}))}; } });
 registry.define({ name: 'operations_case_get', plugin: '质量运营', label: '查询完整质量工作单', description: '按工作单或问题编号读取处理方案、原始来源、当前阶段、已提交与已接受的执行记录、业务追溯和验证数据。附件只返回元信息，未读取附件正文。不能代替人工批准。', parameters: {type:'object',properties:{id:{type:'string'}},required:['id']}, run(args) { return {ok:true,row:operations.resolve(args.id)}; } });
 
 const PORT = Number(process.env.PORT || 8760);
@@ -154,6 +154,7 @@ function match(method, pathname) {
 route('GET', /^\/api\/operations\/schema\.js$/, async (req, res) => sendText(res, 200, fs.readFileSync(path.join(ROOT, 'src/lib/business.js'), 'utf8'), MIME['.js']));
 route('GET', /^\/api\/operations$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.summary() }));
 route('POST', /^\/api\/operations\/scan$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.scan() }));
+route('PUT', /^\/api\/operations\/characteristics\/([^/]+)\/capability$/, async (req, res, id) => sendJson(res, 200, { ok: true, row: operations.setCapability(id, await readJson(req)) }));
 route('PUT', /^\/api\/operations\/policy$/, async (req, res) => sendJson(res, 200, { ok: true, policy: operations.setPolicy(await readJson(req)) }));
 route('POST', /^\/api\/operations\/preview$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.preview(await readJson(req)) }));
 route('POST', /^\/api\/operations\/accept$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.accept(await readJson(req)) }));
@@ -804,7 +805,12 @@ route('POST', /^\/api\/import$/, async (req, res) => {
   if (!filename || !base64) return sendJson(res, 400, { ok: false, error: '缺少 filename / base64' });
   if (!target || target === 'measurements') {
     const preview = operations.preview({ filename, base64 });
-    return sendJson(res, 200, { ok: true, filename, target: 'measurements', ...operations.accept({ previewId: preview.id }), preview: preview.preview });
+    if (body.previewOnly) return sendJson(res, 200, { ok: true, filename, target: 'measurements', ...preview });
+    if (preview.checks.some((row) => row.state === 'conflict' ||
+      (row.state === 'possible' && !['skip', 'keep'].includes(body.duplicateDecisions?.[row.row])))) {
+      return sendJson(res, 409, { ok: false, error: '请在接收预检中核对重复或冲突行', ...preview });
+    }
+    return sendJson(res, 200, { ok: true, filename, target: 'measurements', ...operations.accept({ previewId: preview.id, duplicateDecisions: body.duplicateDecisions }), preview: preview.preview });
   }
   const buf = Buffer.from(base64, 'base64');
   const office = require('./src/lib/office');
