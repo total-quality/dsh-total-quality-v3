@@ -1,53 +1,79 @@
-# 全质开源质量平台
+<p align="center"><img src="icon.svg" width="72" height="72" alt="全质开源质量平台"></p>
+
+<h1 align="center">全质开源质量平台</h1>
+
+<p align="center">面向中小制造企业的免费开源质量管理平台</p>
+
+<p align="center">
+  <a href="https://github.com/total-quality/dsh-total-quality-v3/releases/latest"><img src="https://img.shields.io/github/v/release/total-quality/dsh-total-quality-v3?style=flat-square&amp;logo=github&amp;label=release&amp;labelColor=12213B&amp;color=2458B3" alt="最新版本"></a>
+  <a href="安装说明.md"><img src="https://img.shields.io/badge/docs-installation-287BE0?style=flat-square&amp;labelColor=12213B" alt="安装说明"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-16886B?style=flat-square&amp;labelColor=12213B" alt="MIT 许可证"></a>
+  <a href="https://github.com/total-quality/dsh-total-quality-v3/stargazers"><img src="https://img.shields.io/github/stars/total-quality/dsh-total-quality-v3?style=flat-square&amp;logo=github&amp;label=stars&amp;labelColor=12213B&amp;color=AD722A" alt="GitHub Star 数"></a>
+  <a href="#快速上手"><img src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-5458C8?style=flat-square&amp;labelColor=12213B" alt="DeepSeek Harness plugin"></a>
+</p>
 
 <p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
 
-面向中小制造企业的开源质量管理平台。以 DeepSeek Harness 插件形式运行，侧栏入口「全质开源质量平台2」，页面 `/qip-real-v3/`，MIT 许可证。
+<p align="center">
+  <a href="#项目概览">项目概览</a> · <a href="#快速上手">快速上手</a> · <a href="#功能特性">功能特性</a> · <a href="#使用资料">使用资料</a> · <a href="#版本发布">版本发布</a>
+</p>
 
-[下载安装包](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) · [安装说明](安装说明.md)
+## 项目概览
 
-车间里不缺记录，缺的是能对上号的那一张。巡检表在 Excel 里，超差照片在微信群里，整改单另存一个目录，复测结果又回到邮件附件。周会上被问「这批还有多少在库、谁在复测、凭什么说整改有效」，得翻三四个地方，还不一定翻得齐。
+全质是一套运行在 DeepSeek Harness 里的质量管理工具。适合已经在用 Excel 检验表、问题台账和质量体系文件，想把日常质量工作集中起来的工厂。
 
-全质把这些并到同一张工作单上：异常批次、原始测量值、当前责任人、处理期限、现场提交的附件。从单据能追到原始记录，不用再问人要。
+巡检表发现轴套外径超差，照片发在群里，整改单放在共享目录，复测结果又来了封邮件。到了周会，谁在处理、库存隔离了多少、凭什么说整改有效，往往要翻好几处才能对上。全质把异常批次、原始测量、责任人、期限、处理措施和现场附件放进同一张工作单。从发现问题到结案，都能沿着这张单往下查。
 
-![驾驶舱：待确认、执行中的单据和待办都在这一页](docs/preview/operations.png)
+![质量驾驶舱，查看待确认事项、执行进度和催办记录](docs/preview/operations.png)
 
-## 一张单子怎么走完
+## 快速上手
 
-以机加工车间的轴套外径超差为例。
+1. 在 DeepSeek Harness 的插件管理器添加 [发布页](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) 的 `dsh-total-quality-v3.tgz`。安装后，在侧栏打开「全质开源质量平台2」。
+2. 第一次试用可打开内置样例工作单，批准方案、查看待办，再提交一份复测结果。
+3. 用自己的数据时，从「接收与追溯」导入测量表。现场问题、客户投诉和变更申请也可以直接登记。
 
-1. **导入与筛查** 质量人员导入测量表。平台先查批次、规格限、测量值有没有缺失，再按批次和检测项筛查，超差的生成工作单。现场发现的问题、客诉、变更申请也能手工登记。
-2. **核对与派工** 工作单带出原始测量、异常批次和处理建议。负责人改隔离范围、责任人和期限，批准后进站内待办；不同意的留着不动，操作有记录。
-3. **提交执行结果** 班组写清隔离多少件、有没有已发货、复测了哪些件，附清单或检验记录。负责人在原单上复核，证据不够就退回补充。
-4. **验证与结案** 措施实施后，登记后续批次的样本数、不良数和检验记录，看有没有复发。结案生成 Word 报告，排查过程和有效做法存成经验卡，下次遇到同类问题直接调。
-
-![工作单：原始测量、处理方案、责任人和批准记录](docs/preview/work-order.png)
-
-## 能做的
-
-- 盯单：驾驶舱按待确认、执行中、缺资料分列当天要处理的单据，批次异常能下钻到工作单和原始测量。
-- 追溯：供应商、产品、批次、车间和检验记录放在一处。客诉单登记影响范围、库存和已发货数量，再跟围堵、复测、纠正措施。
-- 过程分析：控制图有 I-MR、Xbar-R、Xbar-S、EWMA 四种，按 GB/T 4091 八条判异准则检查；Cpk、Ppk 给出过程能力和 ppm。
-- 重复问题：反复出现的问题转成 8D 项目，5Why 记原因，能把工作单和测量数据带进去。PFMEA、DFMEA 用结构化表单填，保留修订记录，AP 由人核对。
-- 报告：周报、月报、专项、根因、SPC、8D 直接生成 .docx，8D 和 FMEA 还能导 Excel 和 Markdown。
-- 查规程：上传企业手册、工序规范、产品目录，在助手问「换批后首件要检哪些项」，回答带原文和编号。
-- 体系文件：从现有资料带入适用体系、产品、生产流程和质量方针，核对补齐后按七组调研表生成质量手册、程序文件、作业文件草稿。
-- 收益：按财务口径算年化收益和回收期，参数可改，计算依据随记录留档。
-
-## 自动化到什么程度
-
-测量资料接进来后自动筛查，也可以按设定周期定时检查，节奏在系统设置里调。筛查、归集证据、起草方案、派发待办、超期催办这些流程活交给平台。
-
-审批不交。批准方案、确认执行结果、判定是否结案，都在工作单上由负责人操作，记经办人和时间。助手只负责查资料、整理已有证据、起草文字；现场实测、隔离数量和验证数据由执行人员按实际情况提交。没配模型时，统计、工作单和报告照常能用，缺的只是问答、起草和表单提取。
-
-## 上手
+Web 版用户也可以在终端安装：
 
 ```sh
 dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.11/dsh-total-quality-v3.tgz
 ```
 
-插件管理器里也能直接加本地 .tgz 或插件目录。装完点侧栏「全质开源质量平台2」。第一次建议先走内置样例工作单，从批准方案做到提交验证结果，把流程过一遍；换自己的数据时进「接收与追溯」导入测量表、物料或 BOM，也可以先录一条正在处理的现场异常。
+## 功能特性
 
-数据默认在 `~/.dsh/qip-real-v3/data/`，SQLite 加附件目录，路径可用 `QIP_REAL_V3_DATA_DIR` 改。业务记录和上传的原文件留在本机；资料问答和表单提取会把相关片段发给 Harness 里配置的模型。知识库总容量 100 MB。
+### 质量异常、派工与结案
 
-项目采用 [MIT 许可证](LICENSE.md)，自检步骤见 [CONTRIBUTING](CONTRIBUTING.md)。
+导入 Excel、CSV 或 JSON 测量记录后，平台会核对批次、规格限和测量值，再按批次及检测项筛查。发现异常时生成工作单，供质量负责人查看原始数据和处理建议。
+
+沿用轴套超差的例子，负责人可以在单据上调整围堵范围、人员和时限。批准后，任务进入站内待办。班组在原单填写隔离数量、是否已发货、复测结果，并附上检验记录。质量负责人复核；证据不足就退回补充。措施实施后，可登记后续批次的样本数、不良数和检验记录，再决定是否结案。
+
+筛查周期、自动派工和结案归档可在系统设置中调整。**方案审批、执行结果复核和结案决定由负责人确认。** 平台记录经办人、时间与处理意见。
+
+![质量工作单，包含异常测量、处理方案、责任人和审批操作](docs/preview/work-order.png)
+
+### 批次追溯与过程分析
+
+- **查批次与客诉。** 在工作单记录供应商、产品、批次、工序、检验依据及库存、在制和发货数量。处理客户投诉时，可以继续跟进影响范围、围堵和复测。
+- **看过程有没有波动。** 通过 I-MR、Xbar-R、Xbar-S 或 EWMA 控制图查看过程波动，使用 GB/T 4091 判异准则检查异常信号，并查看 Cpk、Ppk 等过程能力指标。
+- **做专项改进。** 重复问题可以立为改进项目，用 5Why 记录根因和验证依据。8D 可带入工作单与测量数据，PFMEA、DFMEA 支持填写失效链、复核措施优先级和保存修订记录。
+
+### 企业知识库与体系文件
+
+上传自己的质量手册、工序规范或产品目录，工作助手就能查企业资料。比如可以问「这道工序按哪份作业指导书验收？」回答带引用，便于打开原文核对。
+
+企业已有资料也可以用来填写体系调研。平台从原文提取适用体系、产品、流程和质量方针等候选值，用户勾选带入后再审核保存。调研填写后，可生成质量手册、程序文件和作业文件草稿。
+
+### 报告、经验与收益
+
+可以从业务记录生成质量周报、月报、专项分析和 8D 等 Word 报告，8D 与 FMEA 也可导出 Excel 和 Markdown。结案时可以把排查经过和有效措施整理成经验卡。需要核算改进成效时，可记录产量、单位损失等测算依据，计算年化收益和回收期。
+
+## 使用资料
+
+- [安装说明](安装说明.md)涵盖插件管理器和命令行安装。
+- 插件内的「使用指南」可随时查看工作单从资料接收、方案确认到复核归档的完整流程。
+- 业务记录和上传的文件保存在本机，知识库容量为 100 MB。资料问答和表单提取会把相关片段交给 Harness 中配置的模型。统计、工作单和常规报表可在未配置模型时使用。
+
+## 版本发布
+
+[下载最新版](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) · [查看更新记录](CHANGELOG.md) · [提交使用反馈](https://github.com/total-quality/dsh-total-quality-v3/issues)
+
+本项目采用 [MIT 许可证](LICENSE.md)。
