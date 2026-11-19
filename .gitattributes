@@ -1,0 +1,2 @@
+# Keep the original SVG bytes stable for the QR checksum.
+public/assets/wechat-support-blue.svg text eol=lf
