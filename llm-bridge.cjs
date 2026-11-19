@@ -91,6 +91,7 @@ function createBridge(ctx) {
     let text = '';
     let reasoning = '';
     let usage = null;
+    let finishReason = null;
     const stream = call.stream({
       ...call.config,
       system,
@@ -106,14 +107,14 @@ function createBridge(ctx) {
       } else if (chunk.type === 'usage') {
         usage = chunk.usage;
       } else if (chunk.type === 'finish') {
-        const kind = chunk.reason && chunk.reason.kind;
+        const kind = finishReason = chunk.reason?.kind || null;
         if (kind === 'error' || kind === 'aborted') {
           const failure = (chunk.reason && chunk.reason.failure) || {};
           throw new Error(failure.message || (kind === 'aborted' ? '模型调用被中断' : '模型调用失败'));
         }
       }
     }
-    return { text, reasoning, usage, provider: info.provider, model: info.model, pinned: !!info.pinned };
+    return { text, reasoning, usage, finishReason, provider: info.provider, model: info.model, pinned: !!info.pinned };
   }
 
   /** 设置页"测试连通性"：真的发一次请求，不塞预制结果。 */

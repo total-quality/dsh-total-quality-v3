@@ -6,7 +6,7 @@
  *   ① 静态托管前端（public/）
  *   ② 代理大模型请求（解决浏览器跨域 + 密钥不出前端）
  *   ③ 暴露平台 REST API（问题库/项目/SPC/知识库/OA/收益/报表/导入导出）
- *   ④ SSE 流式推送智能体的思考、工具调用链与结果
+ *   ④ SSE 流式推送工具调用链与回答
  *
  * 启动：node server.js  （或双击 start.bat）
  */
@@ -17,6 +17,7 @@ const url = require('url');
 const { pipeline } = require('node:stream/promises');
 
 const ROOT = __dirname;
+const LOADED_VERSION = require('./package.json').version;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const os = require('os');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
@@ -48,6 +49,7 @@ const identity = require('./src/lib/signing-identity').createIdentity(store);
 const backups = require('./src/lib/business-backup').createBackups({store,library,reports:OUTPUT_DIR});
 const qualitySkills = require('./src/lib/quality-skills');
 const agent = require('./agent-host.cjs');
+const chatResponse = require('./src/lib/chat-response');
 const registry = require('./src/tools/registry');
 require('./src/tools/data');
 require('./src/tools/analysis');
@@ -322,7 +324,7 @@ route('GET', /^\/api\/operations\/cases\/([^/]+)\/report$/, async (req, res, id)
 /* ---------------- 健康检查与元信息 ---------------- */
 route('GET', /^\/api\/health$/, async (req, res) => {
   sendJson(res, 200, {
-    ok: true, service: brandName(), version: require('./package.json').version,
+    ok: true, service: brandName(), version: LOADED_VERSION,
     uptime: Math.round(process.uptime()) + 's',
     dataDir: DATA_DIR, counts: countAll(),
     db: store.persist ? store.persist.info() : { engine: 'json', path: store.file },
@@ -620,7 +622,8 @@ Object.keys(WRITABLE).forEach((col) => {
     if (q.sort) { const f = String(q.sort), dir = q.order === 'asc' ? 1 : -1; rows.sort((a, b) => (a[f] > b[f] ? dir : a[f] < b[f] ? -dir : 0)); }
     const total = rows.length;
     const offset = Number(q.offset || 0), limit = q.limit ? Number(q.limit) : 200;
-    sendJson(res, 200, { ok: true, total, rows: rows.slice(offset, offset + limit) });
+    rows = rows.slice(offset, offset + limit);
+    sendJson(res, 200, { ok: true, total, rows: col === 'chats' ? rows.map(chatResponse.historyRow) : rows });
   });
   route('POST', new RegExp('^/api/' + col + '$'), async (req, res) => {
     const body = await readJson(req);
@@ -633,7 +636,7 @@ Object.keys(WRITABLE).forEach((col) => {
   route('GET', new RegExp('^/api/' + col + '/([^/]+)$'), async (req, res, id) => {
     const rec = store.col(col).get(id);
     if (!rec) return sendJson(res, 404, { ok: false, error: '未找到 ' + id });
-    sendJson(res, 200, { ok: true, row: rec });
+    sendJson(res, 200, { ok: true, row: col === 'chats' ? chatResponse.historyRow(rec) : rec });
   });
   route('PUT', new RegExp('^/api/' + col + '/([^/]+)$'), async (req, res, id) => {
     const body = await readJson(req);
@@ -767,10 +770,13 @@ route('POST', /^\/api\/library\/suggestions$/, async (req, res) => {
 /* ---------------- 对话（SSE 流式） ---------------- */
 route('POST', /^\/api\/chat\/stream$/, async (req, res) => {
   const body = await readJson(req);
-  const libraryMode = body.scope === 'library';
+  const libraryMode = body?.scope === 'library';
+  if (typeof body?.text !== 'string' || !body.text.trim()) {
+    return sendJson(res, 400, { ok: false, error: '请填写要发送的问题。' });
+  }
   if (libraryMode) {
     allowLibraryAccess(req);
-    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 4000) {
+    if (body.text.length > 4000) {
       return sendJson(res, 400, { ok: false, error: '请填写不超过 4000 字的知识库问题' });
     }
   }
@@ -790,23 +796,26 @@ route('POST', /^\/api\/chat\/stream$/, async (req, res) => {
   const history = Array.isArray(body.history) ? body.history : [];
 
   try {
-    let result;
-    if (libraryMode) {
+    let result = chatResponse.clarify(body.text, body.scope);
+    if (result) {
+      send({ type: 'content', text: result.content });
+      send({ ...result, type: 'done' });
+    } else if (libraryMode) {
       send({ type: 'library_search' });
       result = { ok: true, ...await knowledge.answer(library, runtime.model && runtime.llm, body.text.trim(), history,
         AbortSignal.any([signal, AbortSignal.timeout(65000)]), {product: typeof body.product==='string' ? body.product.slice(0,80) : '', process: typeof body.process==='string' ? body.process.slice(0,80) : ''}) };
-      if (signal.aborted) return;
       send({ type: 'content', text: result.content });
       send({ type: 'library_sources', sources: result.sources });
     } else {
       result = await agent.run({ text: body.text, sessionId, settings, history, signal, outputDir: OUTPUT_DIR }, send);
     }
+    if (signal.aborted) return;
     // 保存会话
     if (body.saveHistory !== false && result && result.ok) {
       let chat = store.col('chats').get(sessionId);
       const msgs = (chat ? chat.messages : []).concat([
         { role: 'user', content: body.text, ts: new Date().toISOString() },
-        { role: 'assistant', content: result.content, ts: new Date().toISOString(), trace: result.trace, usage: result.usage, sources: result.sources },
+        { role: 'assistant', content: result.content, ts: new Date().toISOString(), trace: result.trace, usage: result.usage, sources: result.sources, incomplete: result.incomplete, clarification: result.clarification },
       ]);
       if (chat) store.col('chats').update(sessionId, { messages: msgs, updatedAt: new Date().toISOString() });
       else store.col('chats').insert({ id: sessionId, title: String(body.text).slice(0, 30), messages: msgs });
@@ -829,7 +838,6 @@ route('POST', /^\/api\/chat\/reject$/, async (req, res) => {
 });
 route('GET', /^\/api\/chat\/pending$/, async (req, res) => sendJson(res, 200, { ok: true, rows: store.col('pendingActions').find((a) => a.status === 'pending') }));
 route('GET', /^\/api\/chats$/, async (req, res) => sendJson(res, 200, { ok: true, rows: store.col('chats').all().map((c) => ({ id: c.id, title: c.title, count: (c.messages || []).length, updatedAt: c.updatedAt })) }));
-route('GET', /^\/api\/chats\/([^/]+)$/, async (req, res, id) => { const c = store.col('chats').get(id); sendJson(res, 200, c ? { ok: true, row: c } : { ok: false, error: '未找到' }); });
 route('DELETE', /^\/api\/chats\/([^/]+)$/, async (req, res, id) => sendJson(res, 200, { ok: store.col('chats').remove(id) }));
 
 /* ---------------- 统计与可视化数据 ---------------- */

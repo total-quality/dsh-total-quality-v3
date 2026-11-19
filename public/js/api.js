@@ -33,7 +33,7 @@
     /** 工具直接调用（界面按钮） */
     tool: (name, args) => req('POST', '/qip-real-v3/api/tools/' + name, args || {}),
 
-    /** 流式对话：onEvent 收到 start/reasoning/content/tool_call/tool_result/confirm_required/done/error/finish */
+    /** 流式对话 */
     async chat(payload, onEvent, signal) {
       const res = await fetch('/qip-real-v3/api/chat/stream', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -48,20 +48,26 @@
       const reader = res.body.getReader();
       const dec = new TextDecoder('utf-8');
       let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const evt = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const line = evt.split('\n').find((l) => l.startsWith('data:'));
-          if (!line) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === '[DONE]') continue;
-          try { onEvent(JSON.parse(data)); } catch (e) { /* 忽略 */ }
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          buf += done ? dec.decode() : dec.decode(value, { stream: true });
+          let boundary;
+          while ((boundary = /\r?\n\r?\n/.exec(buf))) {
+            const evt = buf.slice(0, boundary.index);
+            buf = buf.slice(boundary.index + boundary[0].length);
+            const data = evt.split(/\r?\n/).filter((line) => line.startsWith('data:'))
+              .map((line) => line.slice(5).trimStart()).join('\n');
+            if (!data) continue;
+            if (data === '[DONE]') return;
+            onEvent(JSON.parse(data));
+          }
+          if (done) break;
         }
+        throw new Error('对话连接提前结束，回答可能不完整。请重试。');
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
       }
     },
 

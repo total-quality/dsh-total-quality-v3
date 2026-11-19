@@ -177,11 +177,6 @@ global.Scale = {
     const q = String(text || '').trim();
     if (!q) return;
     const library = scope === 'library' || (scope !== 'tools' && !!document.getElementById('chatLibraryMode')?.checked);
-    if (!library && (!State.bootstrap || !(State.bootstrap.settings.llm || {}).hasApiKey)) {
-      toast('尚未配置大模型 API Key，正在跳转设置页…', 'warn');
-      setTimeout(() => go('settings'), 600);
-      return;
-    }
     if (State.page !== 'aiwb') { await go('aiwb'); }
     const input = document.getElementById('chatInput');
     global.ChatVoice.mount();
@@ -190,7 +185,7 @@ global.Scale = {
     Chat.libraryMode = library;
     if (document.getElementById('chatLibraryMode')) document.getElementById('chatLibraryMode').checked = library;
     Chat.messages.push({ role: 'user', content: q, ts: Date.now() });
-    const am = { role: 'assistant', content: '', thinking: '', thinkingDone: false, trace: [], pending: [], running: true, statusText: '正在理解问题…', ts: Date.now() };
+    const am = { role: 'assistant', content: '', pending: [], running: true, ts: Date.now() };
     Chat.messages.push(am);
     Chat.busy = true;
     updateChatMeta();
@@ -198,40 +193,21 @@ global.Scale = {
     const st = document.getElementById('chatState');
     if (st) st.innerHTML = '<span class="spin"></span> 生成中';
 
-    const history = Chat.messages.slice(0, -1).filter((m) => m.content).map((m) => ({ role: m.role, content: m.content }));
+    const history = Chat.messages.slice(0, -2).filter((m) => m.content && !m.error && !m.incomplete)
+      .map((m) => ({ role: m.role, content: m.content }));
     const ctrl = new AbortController();
     Chat.ctrl = ctrl;
-    let toolSeq = {};
 
     try {
       await API.chat({ text: q, sessionId: Chat.sessionId, history, scope: library ? 'library' : 'tools' }, (ev) => {
         switch (ev.type) {
-          case 'start':
-            am.statusText = '已连接模型（' + ev.model + '，' + ev.tools + ' 个工具可用）';
-            scheduleChatRender(); break;
-          case 'library_search':
-            am.statusText = '正在检索知识库并核对片段…'; scheduleChatRender(); break;
           case 'library_sources':
             am.sources = ev.sources; scheduleChatRender(); scrollBottom(); break;
-          case 'round':
-            am.statusText = '第 ' + ev.round + ' 轮推理…'; scheduleChatRender(); break;
-          case 'reasoning':
-            am.thinking += ev.text; am.statusText = '深度推理中…'; scheduleChatRender(); scrollBottom(); break;
-          case 'reasoning_done':
-            am.thinkingDone = true; scheduleChatRender(); break;
           case 'content':
-            am.content += ev.text; am.statusText = '正在输出结论…'; scheduleChatRender(); scrollBottom(); break;
-          case 'tool_call': {
-            const t = { id: ev.id, name: ev.name, label: ev.label, plugin: ev.plugin, args: ev.args, running: true, ok: true, summary: '执行中…' };
-            am.trace.push(t); toolSeq[ev.id] = t;
-            am.statusText = '调用 ' + ev.plugin + ' · ' + ev.label + ' …';
-            scheduleChatRender(); scrollBottom(); break;
-          }
-          case 'tool_result': {
-            const t = toolSeq[ev.id] || (am.trace.find((x) => x.name === ev.name) || {});
-            t.running = false; t.ok = ev.ok; t.summary = ev.summary; t.ms = ev.ms; t.result = ev.result; t.label = ev.label; t.plugin = ev.plugin;
-            am.statusText = ev.summary; scheduleChatRender(); scrollBottom(); break;
-          }
+            am.content += ev.text; scheduleChatRender(); scrollBottom(); break;
+          case 'done':
+            am.content = ev.content; am.incomplete = !!ev.incomplete;
+            scheduleChatRender(); break;
           case 'confirm_required': {
             const p = { id: ev.id, tool: ev.name, label: ev.label, plugin: ev.plugin, args: ev.args };
             am.pending.push(p); scheduleChatRender(); scrollBottom();
@@ -246,12 +222,10 @@ global.Scale = {
       else am.error = e.message || String(e);
     }
     am.running = false;
-    am.statusText = '';
-    am.thinkingDone = true;
     Chat.busy = false;
     Chat.ctrl = null;
     if (st) st.textContent = '';
-    scheduleChatRender(); scrollBottom(true);
+    scheduleChatRender(); scrollBottom();
     updateChatMeta();
     loadBootstrap().catch(() => {});
   }
@@ -379,12 +353,11 @@ global.Scale = {
       if (!r.row) return toast('会话不存在', 'err');
       global.ChatVoice.mount();
       Chat.sessionId = a.id;
-      Chat.messages = (r.row.messages || []).map((m) => ({ role: m.role, content: m.content, trace: m.trace || [], sources: m.sources || [], pending: [], thinkingDone: true }));
+      Chat.messages = (r.row.messages || []).filter((m) => m?.role).map((m) => ({ role: m.role, content: m.content, sources: m.sources || [], incomplete: !!m.incomplete, pending: [] }));
       closeModal(); renderChat(); updateChatMeta(); toast('已载入历史会话', 'ok');
     },
     quickAsk: async (a) => { await go('aiwb'); send(a.q, 'tools'); },
     aiQuick: async (a) => { await go('aiwb'); send(a.q, 'tools'); },
-    chatFollowup: (a) => send(a.q, 'tools'),
     libraryChat: async () => { Chat.libraryMode = true; await go('aiwb'); document.getElementById('chatInput')?.focus(); },
     librarySource: (args) => QipLibrary.showSource(args),
     libraryDelete: (args) => QipLibrary.remove(args),
@@ -401,16 +374,6 @@ global.Scale = {
           SetState.initDraft = { ...initDraftFromForm(), ...values };
           go('init');
         },
-      });
-    },
-    toggleThink: (a) => { const el = document.getElementById('think-' + a.i); if (el) el.classList.toggle('collapsed'); },
-    showToolResult: (a) => {
-      const m = Chat.messages[a.i]; const t = m && m.trace && m.trace[a.ti];
-      if (!t) return;
-      modal({
-        title: '工具原始返回：' + (t.label || t.name), sub: t.plugin + ' · ' + (t.ms || 0) + 'ms',
-        body: `<div style="font-size:11.5px;color:#5e6b85;margin-bottom:8px;">调用参数：<code>${esc(JSON.stringify(t.args))}</code></div>
-               <pre style="background:#16233c;color:#e6edf7;border-radius:8px;padding:12px;font-size:11.5px;line-height:1.7;overflow:auto;max-height:56vh;">${esc(JSON.stringify(t.result, null, 2))}</pre>`,
       });
     },
     confirmAction: async (a) => {

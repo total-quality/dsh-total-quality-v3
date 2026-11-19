@@ -24,7 +24,7 @@
   /* ================= P2 AI 改进工作台（智能体） ================= */
   const Chat = global.Chat = {
     sessionId: 's-' + new Date().toISOString().slice(0, 10),
-    messages: [],     // {role, content, thinking, trace[], pending[], ts, error}
+    messages: [],     // {role, content, sources[], pending[], ts, error}
     busy: false,
     ctrl: null,
   };
@@ -122,8 +122,10 @@
       </div>`;
       return;
     }
+    const followBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 160;
+    const scrollTop = body.scrollTop;
     body.innerHTML = Chat.messages.map((m, i) => renderMsg(m, i)).join('');
-    body.scrollTop = body.scrollHeight;
+    body.scrollTop = followBottom ? body.scrollHeight : scrollTop;
   }
   global.renderChat = renderChat;
 
@@ -132,17 +134,6 @@
       return `<div class="msg user"><div class="av">我</div><div class="bubble">${esc(m.content).replace(/\n/g, '<br>')}</div></div>`;
     }
     let inner = '';
-    if (m.thinking) inner += `<div class="think" id="think-${i}"><div class="think-hd" data-act="toggleThink" data-args='${esc(JSON.stringify({ i }))}'>💭 深度推理过程 ${m.thinkingDone ? '（点击展开/收起）' : '<span class="typing"><i></i><i></i><i></i></span>'}</div><div class="think-body">${esc(m.thinking.slice(-4000))}</div></div>`;
-    if (m.trace && m.trace.length) {
-      inner += `<div class="trace"><div class="trace-hd">🔎 插件调用链（${m.trace.filter((t) => t.ok).length}/${m.trace.length} 成功）</div>` +
-        m.trace.map((t, ti) => `<div class="tool-step">
-          <div class="ts-ico ${t.running ? 'run' : t.ok ? 'ok' : 'err'}">${t.running ? '<span class="spin"></span>' : t.ok ? '✓' : '✕'}</div>
-          <div style="flex:1;"><b>${esc(t.plugin)}</b> ${esc(t.label)}${t.ms ? `<span style="color:#8791a5;font-size:10.5px;">　${t.ms}ms</span>` : ''}
-            <div class="ts-args">${esc(JSON.stringify(t.args || {}))}</div>
-            <div class="ts-res">${esc(t.summary || '执行中…')}</div>
-            ${t.result ? `<span class="ts-more" data-act="showToolResult" data-args='${esc(JSON.stringify({ i, ti }))}'>查看原始返回 ›</span>` : ''}
-          </div></div>`).join('') + '</div>';
-    }
     if (m.content) inner += `<div class="md-body">${md(m.content)}</div>`;
     if (m.sources?.length) inner += `<div class="library-citations"><strong>原文出处</strong>${m.sources.map((ref) => QipLibrary.sourceButton(ref)).join('')}</div>`;
     if (m.pending && m.pending.length) {
@@ -152,16 +143,8 @@
         <div class="cc-a">${act('✓ 确认执行', 'confirmAction', { id: p.id, i }, 'btn btn-primary btn-sm')}${act('✕ 拒绝', 'rejectAction', { id: p.id, i }, 'btn btn-sm')}</div>
       </div>`).join('');
     }
-    if (m.running) inner += `<div class="run-status"><span class="dot"></span>${esc(m.statusText || '正在推理…')}</div>`;
+    if (m.running && !m.content) inner += '<div class="run-status"><span class="dot"></span>正在生成回答…</div>';
     if (m.error) inner += `<div style="color:#e5484d;font-size:12.5px;">❌ ${esc(m.error)}</div>`;
-    if (m.trace && m.trace.length) {
-      inner += `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-        <span class="quick-cmd" data-act="chatFollowup" data-args='${esc(JSON.stringify({ q: '把上面的分析结论写入根因分析报告（Word）并给出下载链接' }))}'>📄 生成报告</span>
-        <span class="quick-cmd" data-act="chatFollowup" data-args='${esc(JSON.stringify({ q: '把这次分析结论沉淀为知识库经验卡' }))}'>📚 沉淀经验卡</span>
-        <span class="quick-cmd" data-act="chatFollowup" data-args='${esc(JSON.stringify({ q: '把这次分析涉及的数据导出为 Excel' }))}'>📊 导出数据</span>
-        <span class="quick-cmd" data-act="chatFollowup" data-args='${esc(JSON.stringify({ q: '基于这个问题创立 8D 改进项目并推荐团队' }))}'>🧩 一键立项</span>
-      </div>`;
-    }
     return `<div class="msg"><div class="av">AI</div><div class="bubble">${inner}</div></div>`;
   }
 

@@ -76,6 +76,7 @@
     async function request(url, options, signal) {
       const r = await fetch(base+url,{ ...options, signal, cache:'no-store' });
       const payload = await r.json().catch(() => null);
+      if (r.status === 404 && !url) throw Error('当前 Harness 尚未加载语音接口。请重启 Harness Web 后刷新页面。');
       if (!r.ok || !payload?.ok) throw Error(payload?.error || '语音服务暂不可用，请重试。');
       return payload;
     }
