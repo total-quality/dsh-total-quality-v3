@@ -2,13 +2,19 @@
 
 const { createHash, randomUUID } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { Worker, isMainThread, workerData, parentPort } = require('node:worker_threads');
 const office = require('./office');
 const qmsSurvey = require('./qms-survey');
 
-const MAX_LIBRARY = 100 * 1024 * 1024;
+const MIB = 1024 * 1024;
+const MAX_LEGACY_UPLOAD_BYTES = 100 * MIB;
+const DISK_RESERVE_BYTES = 256 * MIB;
+const MAX_TEXT_CHARS = 500000;
+const OFFICE_PARSE_LIMITS = { maxExpanded: 24 * MIB, maxCompressed: 25 * MIB, maxEntries: 1200 };
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
 const formats = ['.txt', '.md', '.markdown', '.csv', '.docx', '.xlsx'];
 if (isMainThread && spawnSync('pdftotext', ['-v'], { timeout: 1500, windowsHide: true }).status === 0) formats.push('.pdf');
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
@@ -28,8 +34,7 @@ function terms(input) {
   return result.filter((word) => /^[\p{L}\p{N}]+$/u.test(word));
 }
 
-function wordParagraphs(buffer) {
-  const main = office.zipRead(buffer, { maxExpanded: 24 * 1024 * 1024, maxEntries: 1200 })['word/document.xml'];
+function wordParagraphs(main) {
   if (!main) fail('Word 文件缺少正文');
   const stack = [office._internals.parseXml(main.toString('utf8'))];
   const paragraphs = [];
@@ -52,23 +57,80 @@ function wordParagraphs(buffer) {
   return paragraphs.join('\n');
 }
 
-function parse(buffer, ext) {
-  const clean = (v) => v.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').replace(/\r\n?/g, '\n').trim();
+function textDecoder(bytes) {
+  const encoding = bytes[0] === 255 && bytes[1] === 254 ? 'utf-16le'
+    : bytes[0] === 254 && bytes[1] === 255 ? 'utf-16be' : 'utf-8';
+  return new TextDecoder(encoding, { fatal: true });
+}
+
+function checkText(text) {
+  if (text.includes('\0')) fail('文本文件请保存为 UTF-8');
+  return text;
+}
+
+function readTextFile(filename) {
+  const handle = fs.openSync(filename, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let count = fs.readSync(handle, buffer, 0, buffer.length, null);
+    const decoder = textDecoder(buffer.subarray(0, count));
+    const fragments = [];
+    let size = 0;
+    let whitespace = '';
+    let newline = '';
+    // A long whitespace suffix does not count toward the searchable text.
+    // Keep only the amount that could fit if more text follows it.
+    const append = (text, final = false) => {
+      let value = newline + checkText(text).replace(CONTROL_CHARS, '');
+      newline = '';
+      if (!final && value.endsWith('\r')) {
+        newline = '\r';
+        value = value.slice(0, -1);
+      }
+      value = value.replace(/\r\n?/g, '\n');
+      if (!size) value = value.trimStart();
+      const body = value.trimEnd();
+      if (body) {
+        size += whitespace.length + body.length;
+        if (size > MAX_TEXT_CHARS) fail('可读正文超过 50 万字，请拆分后建立索引');
+        fragments.push(whitespace + body);
+        whitespace = '';
+      }
+      if (size) whitespace = (whitespace + value.slice(body.length)).slice(0, MAX_TEXT_CHARS - size + 1);
+    };
+    while (count) {
+      append(decoder.decode(buffer.subarray(0, count), { stream: true }));
+      count = fs.readSync(handle, buffer, 0, buffer.length, null);
+    }
+    append(decoder.decode(), true);
+    return fragments.join('');
+  } finally { fs.closeSync(handle); }
+}
+
+function parse({ file, bytes }, ext) {
+  const clean = (v) => v.replace(CONTROL_CHARS, '').replace(/\r\n?/g, '\n').trim();
+  const readParts = (include) => {
+    const limits = { ...OFFICE_PARSE_LIMITS, include };
+    try {
+      return file ? office.zipReadFile(file, limits) : office.zipRead(bytes, limits);
+    } catch (error) {
+      if (/内容过大|条目过多/.test(error.message)) fail('Office 正文或工作表过大，请拆分正文后重新上传');
+      throw error;
+    }
+  };
   let sections;
-  if (ext === '.docx') sections = [{ label: '正文', text: wordParagraphs(buffer) }];
+  if (ext === '.docx') sections = [{ label: '正文', text: wordParagraphs(readParts((name) => name === 'word/document.xml')['word/document.xml']) }];
   else if (ext === '.xlsx') {
-    sections = office.xlsxRead(buffer, { maxExpanded: 24 * 1024 * 1024, maxEntries: 1200 }).sheets.map(({ name, rows }) => ({
+    sections = office.xlsxReadParts(readParts((name) => /\.(xml|rels)$/i.test(name))).sheets.map(({ name, rows }) => ({
       label: '工作表 ' + name,
       text: rows.map((row) => row.map((value) => value ?? '').join(' | ')).join('\n'),
     }));
   } else if (ext === '.pdf') {
-    const result = spawnSync('pdftotext', ['-enc', 'UTF-8', '-layout', '-', '-'], { input: buffer, timeout: 12000, maxBuffer: 3 * 1024 * 1024, windowsHide: true });
+    const result = spawnSync('pdftotext', ['-enc', 'UTF-8', '-layout', file || '-', '-'], { input: file ? undefined : bytes, timeout: 12000, maxBuffer: 3 * MIB, windowsHide: true });
     if (result.status !== 0) fail('PDF 无法读取，可能已加密、损坏或过大');
     sections = result.stdout.toString('utf8').split('\f').map((text, i) => ({ label: '第 ' + (i + 1) + ' 页', text }));
   } else {
-    const encoding = buffer[0] === 255 && buffer[1] === 254 ? 'utf-16le' : buffer[0] === 254 && buffer[1] === 255 ? 'utf-16be' : 'utf-8';
-    const text = new TextDecoder(encoding, { fatal: true }).decode(buffer);
-    if (text.includes('\0')) fail('文本文件请保存为 UTF-8');
+    const text = file ? readTextFile(file) : checkText(textDecoder(bytes).decode(bytes));
     sections = [{ label: '正文', text }];
   }
   const chunks = [];
@@ -76,7 +138,7 @@ function parse(buffer, ext) {
   for (const section of sections) {
     const text = clean(section.text);
     chars += text.length;
-    if (chars > 500000) fail('可读正文超过 50 万字，请拆分后上传');
+    if (chars > MAX_TEXT_CHARS) fail('可读正文超过 50 万字，请拆分后建立索引');
     let start = 0;
     while (start < text.length) {
       const end = Math.min(start + 860, text.length);
@@ -99,7 +161,17 @@ function parse(buffer, ext) {
 
 if (!isMainThread && workerData?.knowledgeParse) {
   try {
-    const chunks = parse(Buffer.from(workerData.bytes), workerData.ext);
+    const { file, databasePath, id, ext } = workerData;
+    let bytes;
+    if (!file) {
+      const legacy = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const row = legacy.prepare('SELECT original FROM documents WHERE id=?').get(id);
+        if (!row) fail('文件不存在', 404);
+        bytes = Buffer.from(row.original);
+      } finally { legacy.close(); }
+    }
+    const chunks = parse({ file, bytes }, ext);
     for (const c of chunks) c.terms = terms(c.content + ' ' + c.label + ' ' + workerData.name).join(' ');
     parentPort.postMessage({ chunks });
   } catch (error) {
@@ -107,10 +179,10 @@ if (!isMainThread && workerData?.knowledgeParse) {
   }
 }
 
-function prepareChunks(name, bytes) {
+function prepareChunks(name, source) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(__filename, {
-      workerData: { knowledgeParse: true, ext: path.extname(name).toLowerCase(), bytes, name },
+      workerData: { knowledgeParse: true, ext: path.extname(name).toLowerCase(), name, ...source },
       resourceLimits: { maxOldGenerationSizeMb: 160 },
     });
     const timeout = setTimeout(() => {
@@ -158,15 +230,31 @@ async function vectorsFor(embed, contents, signal) {
   return vectors;
 }
 
-function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL || '', embed = embeddingModel ? localEmbedding(embeddingModel) : null } = {}) {
+function availableDiskBytes(directory) {
+  const { bavail, bsize } = fs.statfsSync(directory);
+  return bavail * bsize;
+}
+
+function createLibrary(store, {
+  embeddingModel = process.env.QIP_KB_EMBED_MODEL || '',
+  embed = embeddingModel ? localEmbedding(embeddingModel) : null,
+  diskFree = availableDiskBytes,
+} = {}) {
   let db;
   let pumping = false;
   let activeModel;
   const metadata = "id,name,size,createdAt,chunkCount,status,error,vectorStatus";
+  const baseName = () => 'knowledge-library' + (store.scale === 'sme' ? '-sme' : '');
+  const databasePath = () => path.join(store.dir, baseName() + '.db');
+  const originalsDir = () => path.join(store.dir, baseName() + '-files');
+  const filenameFor = (id, ext) => path.join(originalsDir(), id + ext);
+  const removeFile = (file) => {
+    try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  };
   function database() {
     if (db) return db;
-    const suffix = store.scale === 'sme' ? '-sme' : '';
-    const conn = new DatabaseSync(path.join(store.dir, 'knowledge-library' + suffix + '.db'));
+    fs.mkdirSync(originalsDir(), { recursive: true });
+    const conn = new DatabaseSync(databasePath());
     try {
       conn.exec(`
         PRAGMA foreign_keys=ON;
@@ -185,17 +273,65 @@ function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL 
       `);
     } catch (error) { conn.close(); throw error; }
     db = conn;
+    // A stop during upload can leave a partial or finalized file without a metadata row.
+    // Only clean old, generated filenames so a concurrent instance's active upload is untouched.
+    try {
+      const exists = conn.prepare('SELECT id FROM documents WHERE id=?');
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      for (const entry of fs.readdirSync(originalsDir())) {
+        const match = /^([a-f0-9-]{36})\.(part|original)$/.exec(entry);
+        if (!match || (match[2] === 'original' && exists.get(match[1]))) continue;
+        const file = path.join(originalsDir(), entry);
+        if (fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs < cutoff) removeFile(file);
+      }
+    } catch (error) { console.warn('[knowledge-library] 文件清理：' + error.code); }
     return db;
   }
 
   function list() {
     return database().prepare('SELECT ' + metadata + ' FROM documents ORDER BY createdAt DESC, rowid DESC').all();
   }
-  function upload(input) {
-    const name = typeof input?.filename === 'string' ? input.filename.trim() : '';
+  function validatedName(value) {
+    const name = typeof value === 'string' ? value.trim() : '';
     if (!name || name.length > 180 || /[\/\\\x00-\x1f]/.test(name)) fail('文件名称不正确');
-    const ext = path.extname(name).toLowerCase();
-    if (!formats.includes(ext)) fail('请选择 TXT、Markdown、CSV、Word（DOCX）或 Excel（XLSX）文件');
+    if (!formats.includes(path.extname(name).toLowerCase())) fail('请选择知识库支持的文件格式');
+    return name;
+  }
+
+  function spaceAvailable() {
+    return Math.max(0, diskFree(originalsDir()) - DISK_RESERVE_BYTES);
+  }
+
+  function storage() {
+    const usedBytes = database().prepare('SELECT COALESCE(SUM(size), 0) AS used FROM documents').get().used;
+    return { usedBytes, availableBytes: spaceAvailable(), reserveBytes: DISK_RESERVE_BYTES };
+  }
+
+  function requireSpace(size) {
+    if (size > spaceAvailable()) fail('本机磁盘剩余空间不足，知识库需为索引和系统保留空间', 507);
+  }
+
+  function publish(name, size, sha, id) {
+    const conn = database();
+    const existing = conn.prepare('SELECT ' + metadata + ' FROM documents WHERE sha=?').get(sha);
+    if (existing) return { duplicate: true, document: existing };
+    const document = { id, name, size, createdAt: new Date().toISOString(), chunkCount: 0, status: 'queued', vectorStatus: 'none' };
+    const file = filenameFor(id, '.original');
+    fs.renameSync(filenameFor(id, '.part'), file);
+    try {
+      // Empty BLOB marks an external original. Nonempty BLOBs from previous versions are still readable.
+      conn.prepare("INSERT INTO documents (id,name,sha,size,createdAt,original) VALUES (?,?,?,?,?,X'')")
+        .run(id, name, sha, size, document.createdAt);
+    } catch (error) {
+      removeFile(file);
+      throw error;
+    }
+    start();
+    return { duplicate: false, document };
+  }
+
+  function upload(input) {
+    const name = validatedName(input?.filename);
     let bytes = input.bytes;
     if (!Buffer.isBuffer(bytes)) {
       const encoded = input.base64;
@@ -203,17 +339,51 @@ function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL 
       bytes = Buffer.from(encoded, 'base64');
     }
     if (!bytes.length) fail('文件为空');
-    if (bytes.length > MAX_LIBRARY) fail('文件超过知识库总容量 100 MB', 413);
-    const conn = database();
+    if (bytes.length > MAX_LEGACY_UPLOAD_BYTES) fail('大文件请使用知识库页面或二进制上传', 413);
+    database();
     const sha = createHash('sha256').update(bytes).digest('hex');
-    const existing = conn.prepare('SELECT ' + metadata + ' FROM documents WHERE sha=?').get(sha);
-    if (existing) return { duplicate: true, document: existing };
-    const { size, total } = conn.prepare('SELECT COALESCE(sum(size), 0) AS size, count(*) AS total FROM documents').get();
-    if (size + bytes.length > MAX_LIBRARY || total >= 200) fail('文件库已达到 200 个文件或 100 MB 的上限，请先移除不再使用的文件');
-    const document = { id: randomUUID(), name, size: bytes.length, createdAt: new Date().toISOString(), chunkCount: 0, status: 'queued', vectorStatus: 'none' };
-    conn.prepare('INSERT INTO documents (id,name,sha,size,createdAt,original) VALUES (?,?,?,?,?,?)').run(document.id, name, sha, document.size, document.createdAt, bytes);
-    start();
-    return { duplicate: false, document };
+    requireSpace(bytes.length);
+    const id = randomUUID();
+    const temp = filenameFor(id, '.part');
+    try {
+      fs.writeFileSync(temp, bytes, { flag: 'wx', mode: 0o600, flush: true });
+      return publish(name, bytes.length, sha, id);
+    } finally { removeFile(temp); }
+  }
+
+  async function uploadStream(filename, stream, expectedBytes) {
+    const name = validatedName(filename);
+    database();
+    requireSpace(expectedBytes || 1);
+    const id = randomUUID();
+    const temp = filenameFor(id, '.part');
+    const hash = createHash('sha256');
+    let size = 0;
+    let budget = 0;
+    try {
+      const file = await fs.promises.open(temp, 'wx', 0o600);
+      try {
+        for await (const chunk of stream.iterator({ destroyOnReturn: false })) {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          if (bytes.length > budget) {
+            const free = spaceAvailable();
+            if (bytes.length > free) fail('本机磁盘剩余空间不足，上传未完成', 507);
+            budget = Math.min(free, Math.max(bytes.length, 4 * MIB));
+          }
+          await file.writeFile(bytes);
+          hash.update(bytes);
+          size += bytes.length;
+          budget -= bytes.length;
+        }
+        if (!size) fail('文件为空');
+        if (expectedBytes !== undefined && expectedBytes !== size) fail('上传内容不完整');
+        await file.sync();
+      } finally { await file.close(); }
+      return publish(name, size, hash.digest('hex'), id);
+    } catch (error) {
+      if (['ENOSPC', 'EDQUOT'].includes(error.code)) fail('本机磁盘空间不足，上传未完成', 507);
+      throw error;
+    } finally { removeFile(temp); }
   }
 
   function clearIndex(conn, id) {
@@ -221,10 +391,11 @@ function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL 
     conn.prepare('DELETE FROM chunks WHERE documentId=?').run(id);
     conn.prepare('DELETE FROM parents WHERE documentId=?').run(id);
   }
-  async function ingest(conn, id, name, original) {
+  async function ingest(conn, { id, name, external }) {
     conn.prepare("UPDATE documents SET status='processing', error='' WHERE id=?").run(id);
     try {
-      const chunks = await prepareChunks(name, original);
+      const source = external ? { file: filenameFor(id, '.original') } : { id, databasePath: databasePath() };
+      const chunks = await prepareChunks(name, source);
       if (!conn.prepare('SELECT id FROM documents WHERE id=?').get(id)) return;
       conn.exec('BEGIN IMMEDIATE');
       try {
@@ -277,8 +448,8 @@ function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL 
           activeModel = embeddingModel;
         }
         while (true) {
-          const doc = conn.prepare("SELECT id,name,original FROM documents WHERE status='queued' ORDER BY rowid LIMIT 1").get();
-          if (doc) { await ingest(conn, doc.id, doc.name, doc.original); continue; }
+          const doc = conn.prepare("SELECT id,name,length(original)=0 AS external FROM documents WHERE status='queued' ORDER BY rowid LIMIT 1").get();
+          if (doc) { await ingest(conn, doc); continue; }
           const job = embed && conn.prepare("SELECT id FROM documents WHERE status='ready' AND vectorStatus='queued' ORDER BY rowid LIMIT 1").get();
           if (!job) break;
           await embedDocument(conn, job.id);
@@ -304,16 +475,23 @@ function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL 
 
   function remove(id) {
     const conn = database();
+    const row = conn.prepare('SELECT length(original)=0 AS external FROM documents WHERE id=?').get(id);
+    if (!row) fail('文件不存在', 404);
     conn.exec('BEGIN IMMEDIATE');
     try {
       clearIndex(conn, id);
-      if (!conn.prepare('DELETE FROM documents WHERE id=?').run(id).changes) fail('文件不存在', 404);
+      conn.prepare('DELETE FROM documents WHERE id=?').run(id);
       conn.exec('COMMIT');
     } catch (error) { conn.exec('ROLLBACK'); throw error; }
+    if (row.external) {
+      try { removeFile(filenameFor(id, '.original')); }
+      catch (error) { console.warn('[knowledge-library] 文件清理：' + error.code); }
+    }
   }
   function original(id) {
-    const row = database().prepare('SELECT name, original FROM documents WHERE id=?').get(id);
+    const row = database().prepare('SELECT name, size, original FROM documents WHERE id=?').get(id);
     if (!row) fail('文件不存在', 404);
+    if (!row.original.length) return { name: row.name, size: row.size, file: filenameFor(id, '.original') };
     return row;
   }
   const CHUNK_SELECT = 'SELECT c.documentId, c.part, c.label, c.content, d.name FROM chunks c JOIN documents d ON d.id=c.documentId';
@@ -355,7 +533,7 @@ function createLibrary(store, { embeddingModel = process.env.QIP_KB_EMBED_MODEL 
       return ranked.sort((a, b) => b.score - a.score).slice(0, 16).map((row) => chunk.get(row.id));
     } catch { return []; }
   }
-  return { list, upload, remove, original, excerpt, search, vectorSearch, context, retry, start, embeddingEnabled: !!embed };
+  return { list, storage, upload, uploadStream, remove, original, excerpt, search, vectorSearch, context, retry, start, embeddingEnabled: !!embed };
 }
 
 function source(row, number) {
@@ -520,4 +698,4 @@ async function answer(library, llm, question, history, signal) {
   return { content: payload.answer, sources };
 }
 
-module.exports = { createLibrary, formats, MAX_LIBRARY, suggestions, answer };
+module.exports = { createLibrary, formats, MAX_LEGACY_UPLOAD_BYTES, suggestions, answer };

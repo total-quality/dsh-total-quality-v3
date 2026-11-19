@@ -4,6 +4,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const { setTimeout: wait } = require('node:timers/promises');
 const { createLibrary, answer, suggestions } = require('../src/lib/knowledge-library');
 const office = require('../src/lib/office');
@@ -13,6 +14,10 @@ const makeLibrary = (options) => {
   return createLibrary({ dir, scale: 'sme' }, options);
 };
 const add = (library, filename, data) => library.upload({ filename, base64: Buffer.from(data).toString('base64') });
+const originalBytes = (library, id) => {
+  const row = library.original(id);
+  return row.file ? fs.readFileSync(row.file) : Buffer.from(row.original);
+};
 async function settled(library, id, check = (row) => ['ready', 'failed'].includes(row.status)) {
   for (let i = 0; i < 120; i++) {
     const row = library.list().find((doc) => doc.id === id);
@@ -31,7 +36,7 @@ test('empty file library, durable intake, duplicate detection, Office parsing, r
   assert.deepEqual(library.search('固定螺栓'), []);
   assert.equal(add(library, '重命名.docx', bytes).duplicate, true);
   assert.equal((await settled(library, document.id)).status, 'ready');
-  assert.deepEqual(Buffer.from(library.original(document.id).original), bytes);
+  assert.deepEqual(originalBytes(library, document.id), bytes);
   assert.equal(library.search('固定螺栓')[0].documentId, document.id);
   library.retry(document.id);
   assert.deepEqual(library.search('螺栓'), []);
@@ -106,9 +111,9 @@ test('an interrupted ingest is resumed from the stored original, and citations h
   const store = { dir, scale: 'sme' };
   const library = createLibrary(store);
   library.list();
+  const content = '密封圈检验判定仅在蓝色标记时适用。\n' + '这一行是不相关的过程记录。\n'.repeat(75) + '若投料批次更换，应当重新确认。';
   const writer = new DatabaseSync(path.join(dir, 'knowledge-library-sme.db'));
   try {
-    const content = '密封圈检验判定仅在蓝色标记时适用。\n' + '这一行是不相关的过程记录。\n'.repeat(75) + '若投料批次更换，应当重新确认。';
     const raw = Buffer.from(content);
     writer.prepare("INSERT INTO documents (id,name,sha,size,createdAt,original,status) VALUES (?,?,?,?,?,?,'processing')").run(
       'pending', '规范.txt', 'fixture', raw.length, '2026-11-18', raw);
@@ -118,6 +123,7 @@ test('an interrupted ingest is resumed from the stored original, and citations h
   const hit = library.search('密封圈检验判定')[0];
   assert(!hit.content.includes('若投料批次更换'));
   assert(library.context(hit).context.includes('若投料批次更换'));
+  assert.equal(originalBytes(library, 'pending').toString('utf8'), content);
   library.remove('pending');
   assert.deepEqual(library.search('密封圈检验判定'), []);
 });
@@ -131,5 +137,45 @@ test('a DOCX exceeding the former per-file upload limit can be indexed and downl
   const { document } = library.upload({ filename: '大文件.docx', bytes });
   assert.equal((await settled(library, document.id)).status, 'ready');
   assert.equal(library.search('合格标签')[0].documentId, document.id);
-  assert.deepEqual(Buffer.from(library.original(document.id).original), bytes);
+  assert.deepEqual(originalBytes(library, document.id), bytes);
+});
+
+test('stream failures release their partial files and respect live disk space', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qip-library-space-'));
+  const library = createLibrary({ dir, scale:'sme' }, {
+    diskFree(folder) {
+      const partial = fs.readdirSync(folder).filter((name) => name.endsWith('.part'))
+        .reduce((total,name) => total + fs.statSync(path.join(folder,name)).size, 0);
+      return 256 * 1024 * 1024 + 8 - partial;
+    },
+  });
+  assert.equal(library.storage().availableBytes,8);
+  await assert.rejects(
+    library.uploadStream('太大.txt', Readable.from([Buffer.from('1234'), Buffer.from('56789')])),
+    { status:507 },
+  );
+  const failed = Readable.from((async function* () {
+    yield Buffer.from('abc');
+    throw new Error('连接中断');
+  })());
+  await assert.rejects(library.uploadStream('断开.txt',failed), /连接中断/);
+  assert.deepEqual(fs.readdirSync(path.join(dir,'knowledge-library-sme-files')),[]);
+  assert.equal(library.storage().usedBytes,0);
+});
+
+test('new uploads work with more than 200 previously stored documents', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qip-library-many-'));
+  const library = createLibrary({ dir, scale:'sme' });
+  library.list();
+  const writer = new DatabaseSync(path.join(dir,'knowledge-library-sme.db'));
+  try {
+    const insert = writer.prepare("INSERT INTO documents (id,name,sha,size,createdAt,original,status) VALUES (?,?,?,?,?,?,'ready')");
+    writer.exec('BEGIN');
+    for (let i=0; i<201; i++) insert.run(String(i),i+'.txt','legacy-'+i,1,'2026-11-19',Buffer.from('x'));
+    writer.exec('COMMIT');
+  } finally { writer.close(); }
+  const { document } = await library.uploadStream('复测.txt',Readable.from([Buffer.from('逐件复测轴套外径')]));
+  assert.equal(library.list().length,202);
+  assert.equal((await settled(library,document.id)).status,'ready');
 });

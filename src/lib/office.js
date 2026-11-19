@@ -230,28 +230,57 @@ function findEOCD(buf) {
  */
 function zipRead(buf, limits = {}) {
   if (!Buffer.isBuffer(buf)) buf = toBuffer(buf);
-  const eocd = findEOCD(buf);
-  if (eocd < 0) throw new Error('zipRead：找不到 ZIP 结束标记（不是合法的 ZIP 数据）');
+  return zipReadSource(buf.length, (offset, length) => buf.subarray(offset, offset + length), limits);
+}
 
-  let entryCount = buf.readUInt16LE(eocd + 10);
-  let cdOffset = buf.readUInt32LE(eocd + 16);
-  let cdSize = buf.readUInt32LE(eocd + 12);
+function zipReadFile(filename, limits = {}) {
+  const fs = require('node:fs');
+  const handle = fs.openSync(filename, 'r');
+  try {
+    return zipReadSource(fs.fstatSync(handle).size, (offset, length) => {
+      const buffer = Buffer.allocUnsafe(length);
+      let received = 0;
+      while (received < length) {
+        const bytes = fs.readSync(handle, buffer, received, length - received, offset + received);
+        if (!bytes) throw new Error('ZIP 文件提前结束');
+        received += bytes;
+      }
+      return buffer;
+    }, limits);
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function zipReadSource(size, read, limits) {
+  const tailStart = Math.max(0, size - 22 - 0xffff);
+  const tail = read(tailStart, size - tailStart);
+  const tailEOCD = findEOCD(tail);
+  if (tailEOCD < 0) throw new Error('zipRead：找不到 ZIP 结束标记（不是合法的 ZIP 数据）');
+  const eocd = tailStart + tailEOCD;
+
+  let entryCount = tail.readUInt16LE(tailEOCD + 10);
+  let cdOffset = tail.readUInt32LE(tailEOCD + 16);
+  let cdSize = tail.readUInt32LE(tailEOCD + 12);
 
   // ---- ZIP64（>4GB 或 >65535 条目）----
-  if (entryCount === 0xffff || cdOffset === 0xffffffff) {
-    const locPos = eocd - 20;
-    if (locPos >= 0 && buf.readUInt32LE(locPos) === 0x07064b50) {
-      const z64 = Number(buf.readBigUInt64LE(locPos + 8));
-      if (z64 >= 0 && buf.readUInt32LE(z64) === 0x06064b50) {
-        entryCount = Number(buf.readBigUInt64LE(z64 + 32));
-        cdSize = Number(buf.readBigUInt64LE(z64 + 40));
-        cdOffset = Number(buf.readBigUInt64LE(z64 + 48));
+  if ((entryCount === 0xffff || cdOffset === 0xffffffff || cdSize === 0xffffffff) && eocd >= 20) {
+    const locator = read(eocd - 20, 20);
+    if (locator.readUInt32LE(0) === 0x07064b50) {
+      const offset = Number(locator.readBigUInt64LE(8));
+      if (offset + 56 <= eocd - 20) {
+        const zip64 = read(offset, 56);
+        if (zip64.readUInt32LE(0) === 0x06064b50) {
+          entryCount = Number(zip64.readBigUInt64LE(32));
+          cdSize = Number(zip64.readBigUInt64LE(40));
+          cdOffset = Number(zip64.readBigUInt64LE(48));
+        }
       }
     }
   }
-  if (cdOffset + cdSize > buf.length) {
+  if (cdOffset + cdSize > size) {
     // 少数实现会把偏移写成相对值，这里做一次兜底重算
-    cdOffset = buf.length - cdSize - 22;
+    cdOffset = size - cdSize - 22;
     if (cdOffset < 0) throw new Error('zipRead：中央目录偏移越界，文件可能被截断');
   }
 
@@ -259,68 +288,72 @@ function zipRead(buf, limits = {}) {
   if (limits.maxEntries && entryCount > limits.maxEntries) throw new Error("ZIP 条目过多");
   let expanded = 0;
   let p = cdOffset;
+  const directoryEnd = cdOffset + cdSize;
   for (let i = 0; i < entryCount; i++) {
-    if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) break;
-
-    const method = buf.readUInt16LE(p + 10);
-    let compSize = buf.readUInt32LE(p + 20);
-    let rawSize = buf.readUInt32LE(p + 24);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    let localOffset = buf.readUInt32LE(p + 42);
-
-    const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
+    if (p + 46 > directoryEnd) break;
+    const header = read(p, 46);
+    if (header.readUInt32LE(0) !== 0x02014b50) break;
+    const method = header.readUInt16LE(10);
+    let compSize = header.readUInt32LE(20);
+    let rawSize = header.readUInt32LE(24);
+    const nameLen = header.readUInt16LE(28);
+    const extraLen = header.readUInt16LE(30);
+    const commentLen = header.readUInt16LE(32);
+    let localOffset = header.readUInt32LE(42);
+    const nameOffset = p + 46;
+    p = nameOffset + nameLen + extraLen + commentLen;
+    if (p > directoryEnd) break;
+    const key = read(nameOffset, nameLen).toString('utf8').replace(/\\/g, '/');
+    if (!key || key.endsWith('/') || (limits.include && !limits.include(key))) continue;
 
     // ZIP64 扩展字段（头里写 0xFFFFFFFF 时真实值在这里）
     if (compSize === 0xffffffff || rawSize === 0xffffffff || localOffset === 0xffffffff) {
-      const ex = p + 46 + nameLen;
-      let q = ex;
-      const exEnd = ex + extraLen;
-      while (q + 4 <= exEnd) {
-        const hid = buf.readUInt16LE(q);
-        const hsz = buf.readUInt16LE(q + 2);
+      const extra = read(nameOffset + nameLen, extraLen);
+      let q = 0;
+      while (q + 4 <= extraLen) {
+        const hid = extra.readUInt16LE(q);
+        const hsz = extra.readUInt16LE(q + 2);
+        if (q + 4 + hsz > extraLen) break;
         if (hid === 0x0001) {
           let r = q + 4;
-          if (rawSize === 0xffffffff) { rawSize = Number(buf.readBigUInt64LE(r)); r += 8; }
-          if (compSize === 0xffffffff) { compSize = Number(buf.readBigUInt64LE(r)); r += 8; }
-          if (localOffset === 0xffffffff) { localOffset = Number(buf.readBigUInt64LE(r)); r += 8; }
+          const fields = [rawSize, compSize, localOffset].filter((value) => value === 0xffffffff).length;
+          if (hsz < fields * 8) throw new Error('ZIP64 条目不完整');
+          if (rawSize === 0xffffffff) { rawSize = Number(extra.readBigUInt64LE(r)); r += 8; }
+          if (compSize === 0xffffffff) { compSize = Number(extra.readBigUInt64LE(r)); r += 8; }
+          if (localOffset === 0xffffffff) localOffset = Number(extra.readBigUInt64LE(r));
           break;
         }
         q += 4 + hsz;
       }
     }
 
-    p += 46 + nameLen + extraLen + commentLen;
-
-    if (!name || name.endsWith('/')) continue; // 目录项
-    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) continue;
+    if (localOffset + 30 > size) continue;
+    const local = read(localOffset, 30);
+    if (local.readUInt32LE(0) !== 0x04034b50) continue;
 
     // 以本地文件头里的 name/extra 长度推算数据起点（本地头与中央目录的 extra 可能不同）
-    const lNameLen = buf.readUInt16LE(localOffset + 26);
-    const lExtraLen = buf.readUInt16LE(localOffset + 28);
-    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
-    const dataEnd = dataStart + compSize;
-    if (dataStart > buf.length) continue;
-
-    const raw = buf.slice(dataStart, Math.min(dataEnd, buf.length));
+    const dataStart = localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+    if (dataStart > size) continue;
+    const readSize = Math.min(compSize, size - dataStart);
     const remaining = limits.maxExpanded ? limits.maxExpanded - expanded : Infinity;
-    if (remaining < rawSize || (method === 0 && raw.length > remaining)) throw new Error('ZIP 解压内容过大');
+    if (remaining < rawSize || (method === 0 && readSize > remaining) || (limits.maxCompressed && readSize > limits.maxCompressed)) {
+      throw new Error('ZIP 正文内容过大');
+    }
+    const raw = read(dataStart, readSize);
     let content;
     if (method === 0) {
       content = Buffer.from(raw); // stored
     } else if (method === 8) {
       content = zlib.inflateRawSync(raw, limits.maxExpanded ? { maxOutputLength: Math.max(1, remaining) } : undefined); // deflate
     } else {
-      throw new Error('zipRead：不支持的压缩方式 method=' + method + '（条目 ' + name + '）');
+      throw new Error('zipRead：不支持的压缩方式 method=' + method + '（条目 ' + key + '）');
     }
     expanded += content.length;
     if (limits.maxExpanded && expanded > limits.maxExpanded) throw new Error('ZIP 解压内容过大');
     // 大小已知时按声明值裁剪（防御性）
     if (rawSize > 0 && content.length > rawSize) content = content.slice(0, rawSize);
 
-    const key = name.replace(/\\/g, '/');
-    if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = content;
+    if (!Object.prototype.hasOwnProperty.call(out, key)) Object.defineProperty(out, key, { value: content, enumerable: true, writable: true, configurable: true });
   }
   return out;
 }
@@ -1193,7 +1226,10 @@ function resolvePartPath(baseDir, target) {
  * @returns {{sheets: Array<{name:string, rows:string[][]}>}}
  */
 function xlsxRead(buf, limits) {
-  const files = zipRead(buf, limits);
+  return xlsxReadParts(zipRead(buf, limits));
+}
+
+function xlsxReadParts(files) {
   // 大小写不敏感 + 去掉前导斜杠的查表
   const index = new Map();
   for (const k of Object.keys(files)) index.set(k.replace(/^\/+/, '').toLowerCase(), files[k]);
@@ -1961,9 +1997,11 @@ module.exports = {
   // ZIP
   zipWrite,
   zipRead,
+  zipReadFile,
   // XLSX
   xlsxWrite,
   xlsxRead,
+  xlsxReadParts,
   // CSV
   csvWrite,
   csvRead,

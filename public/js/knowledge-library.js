@@ -2,7 +2,16 @@
   'use strict';
   const { esc, act, dt, modal, closeModal, toast } = UI;
   const base = '/qip-real-v3/api/library';
-  const size = (bytes) => bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(1) + ' KB';
+  const size = (bytes) => {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) {
+      bytes /= 1024;
+      i++;
+    }
+    return (i ? bytes.toFixed(1) : bytes) + ' ' + units[i];
+  };
+  const storageSummary = (storage) => storage ? '已保存原文件 ' + size(storage.usedBytes) + ' · 本机可用空间约 ' + size(storage.availableBytes) : '';
   const download = (id) => base + '/' + encodeURIComponent(id) + '/download';
   const status = { queued: '等待解析', processing: '正在解析', ready: '可检索', failed: '解析失败' };
 
@@ -56,7 +65,8 @@
       <aside class="card"><div class="card-hd"><span class="t">检索原文</span></div>
         <form id="librarySearch" class="library-search"><label>文件名、产品、工序或关键词<input class="inp" name="query" required maxlength="500" placeholder="例如：进料检验抽样规则"></label><button class="btn" type="submit">检索</button></form>
         <div id="libraryHits"></div>
-        <p class="library-tip">支持 TXT、Markdown、CSV、DOCX、XLSX${data.formats.includes('.pdf') ? '、有文字层的 PDF' : ''}。文件库总容量为 100 MB。原文件与索引保存在本机。使用问答或资料提取时，相关片段会发送到 Harness 当前配置的模型。</p>
+        <p class="library-tip" id="libraryStorage">${esc(storageSummary(data.storage))}</p>
+        <p class="library-tip">支持 TXT、Markdown、CSV、DOCX、XLSX${data.formats.includes('.pdf') ? '、有文字层的 PDF' : ''}。原文件与索引保存在本机，可用空间会随磁盘使用变化。正文过大时可下载原文件，把正文拆分成几份再上传。问答或资料提取只转交相关片段给 Harness 当前配置的模型。</p>
         <p class="library-tip">${data.embeddingEnabled ? '已配置本机向量索引，问答会同时使用向量和关键词召回。' : '关键词索引已启用，助手会通过模型改写问题和重排片段。'}</p>
         ${act('查看经验卡', 'goto', { page: 'knowledge' }, 'btn btn-sm')}
       </aside></div>`;
@@ -65,6 +75,7 @@
       const input = document.getElementById('libraryUpload');
       const documents = document.getElementById('libraryDocuments');
       const listCount = document.getElementById('libraryCount');
+      const storageStatus = document.getElementById('libraryStorage');
       const notices = document.getElementById('libraryNotice');
       const form = document.getElementById('librarySearch');
       let polling = 0;
@@ -72,10 +83,11 @@
       async function refresh() {
         clearTimeout(polling);
         if (!documents.isConnected) return;
-        const { documents: rows, embeddingEnabled } = await API.get(base);
+        const { documents: rows, embeddingEnabled, storage } = await API.get(base);
         if (!documents.isConnected) return;
         documents.innerHTML = table(rows);
         listCount.textContent = rows.length + ' 个';
+        storageStatus.textContent = storageSummary(storage);
         if (rows.some((row) => ['queued', 'processing'].includes(row.status) || (embeddingEnabled && row.vectorStatus === 'queued'))) {
           polling = setTimeout(() => refresh().catch((error) => { notices.textContent = error.message; }), 850);
         }

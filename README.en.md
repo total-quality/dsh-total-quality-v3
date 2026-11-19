@@ -42,7 +42,7 @@ Consider a batch of bushings with an oversize outside diameter. Measurements are
 For the web profile, you can also install from a terminal:
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.11/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.12/dsh-total-quality-v3.tgz
 ```
 
 ## Use Cases
@@ -109,7 +109,7 @@ Screening intervals, automatic drafting, dispatch, and archiving can be configur
 ## Resources
 
 - See the [installation guide](安装说明.md) for plugin manager and command-line installation. The in-app user guide explains each step from intake to closure.
-- This release runs inside your local Harness instance. Work records, attachments, and original files stay on the machine. Use imports and local forms to bring in company data. The document library holds up to 100 MB. Document questions and form extraction send relevant excerpts to the configured model.
+- This release runs inside your local Harness instance. Work records, attachments, and original files stay on the machine. Use imports and local forms to bring in company data. Library storage depends on available disk space. The library shows how much space the saved originals use and how much is available for new files. Document questions and form extraction send relevant excerpts to the configured model.
 - When [reporting an issue or suggesting an improvement](https://github.com/total-quality/dsh-total-quality-v3/issues), include the page and the steps you followed.
 
 ## Releases

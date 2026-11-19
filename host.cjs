@@ -14,6 +14,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
+const { pipeline } = require('node:stream/promises');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -561,16 +562,32 @@ function requestSignal(res) {
 
 route('GET', /^\/api\/library$/, async (req, res) => {
   allowLibraryAccess(req);
-  sendJson(res, 200, { ok: true, documents: library.list(), formats: knowledge.formats, embeddingEnabled: library.embeddingEnabled });
+  sendJson(res, 200, { ok: true, documents: library.list(), formats: knowledge.formats, storage: library.storage(), embeddingEnabled: library.embeddingEnabled });
 });
 route('POST', /^\/api\/library$/, async (req, res) => {
   allowLibraryAccess(req);
   const raw = req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() === 'application/octet-stream';
-  // The payload ceiling follows the total library quota. Legacy JSON needs base64 overhead.
-  const input = raw
-    ? { filename: qs(req).filename, bytes: await readBody(req, knowledge.MAX_LIBRARY) }
-    : await readJson(req, Math.ceil(knowledge.MAX_LIBRARY / 3) * 4 + 8192);
-  const result = library.upload(input);
+  let result;
+  if (raw) {
+    const expected = req.headers['content-length'] === undefined ? undefined : Number(req.headers['content-length']);
+    if (expected !== undefined && (!Number.isSafeInteger(expected) || expected < 0)) {
+      return sendJson(res, 400, { ok:false, error:'文件大小不正确' });
+    }
+    try {
+      result = await library.uploadStream(qs(req).filename, req, expected);
+    } catch (error) {
+      if (req.destroyed || res.destroyed) return;
+      if (!req.complete) {
+        res.setHeader('Connection', 'close');
+        req.resume();
+      }
+      throw error;
+    }
+  } else {
+    // The old JSON client still buffers base64. Browser uploads use the binary stream above.
+    const input = await readJson(req, Math.ceil(knowledge.MAX_LEGACY_UPLOAD_BYTES / 3) * 4 + 8192);
+    result = library.upload(input);
+  }
   sendJson(res, result.duplicate ? 200 : 202, { ok: true, ...result });
 });
 route('GET', /^\/api\/library\/search$/, async (req, res) => {
@@ -585,9 +602,18 @@ route('GET', /^\/api\/library\/([a-f0-9-]+)\/parts\/(\d+)$/, async (req, res, id
 route('GET', /^\/api\/library\/([a-f0-9-]+)\/download$/, async (req, res, id) => {
   allowLibraryAccess(req);
   const row = library.original(id);
+  let handle;
+  if (row.file) {
+    try { handle = await fs.promises.open(row.file, 'r'); }
+    catch (error) {
+      if (error.code === 'ENOENT') return sendJson(res, 404, { ok:false, error:'本机缺少该原文件' });
+      throw error;
+    }
+  }
   res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(row.name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16)),
-    'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Length': row.original.length });
-  res.end(Buffer.from(row.original));
+    'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Length': row.size });
+  if (handle) await pipeline(handle.createReadStream(), res);
+  else res.end(row.original);
 });
 route('POST', /^\/api\/library\/([a-f0-9-]+)\/retry$/, async (req, res, id) => {
   allowLibraryAccess(req);

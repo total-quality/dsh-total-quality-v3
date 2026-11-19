@@ -42,7 +42,7 @@
 Web 版可用以下命令安装：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.11/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.12/dsh-total-quality-v3.tgz
 ```
 
 ## 业务场景
@@ -109,7 +109,7 @@ dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-
 ## 使用资料
 
 - [安装说明](安装说明.md)和插件内「使用指南」可以对照看。初次试用有样例工作单、测量 CSV 模板和自己的文件上传入口。
-- 当前版本在本机 Harness 中运行。业务记录、附件和上传原文件保存在本机，企业数据可以通过文件导入和站内表单提交。知识库总容量为 100 MB，资料问答和表单提取会把相关原文片段交给所配置的模型。
+- 当前版本在本机 Harness 中运行。业务记录、附件和上传原文件保存在本机，企业数据可以通过文件导入和站内表单提交。知识库可用空间随本机磁盘变化，页面会显示已保存的原文件大小和剩余可用空间。资料问答和表单提取会把相关原文片段交给所配置的模型。
 - [反馈问题或建议](https://github.com/total-quality/dsh-total-quality-v3/issues)时，可以附上使用场景、所在页面和操作步骤。
 
 ## 版本发布
