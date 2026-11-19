@@ -43,6 +43,8 @@ const qmsSurvey = require('./src/lib/qms-survey');
 const localWorkflows = require('./src/lib/local-workflows');
 const knowledge = require('./src/lib/knowledge-library');
 const library = knowledge.createLibrary(store);
+const identity = require('./src/lib/signing-identity').createIdentity(store);
+const backups = require('./src/lib/business-backup').createBackups({store,library,reports:OUTPUT_DIR});
 const qualitySkills = require('./src/lib/quality-skills');
 const agent = require('./agent-host.cjs');
 const registry = require('./src/tools/registry');
@@ -151,6 +153,78 @@ function match(method, pathname) {
 }
 
 /* V3: one durable work order from intake to closure; existing endpoints stay available. */
+
+/* Local employee accounts provide verified identities for the quality work order. */
+route('GET', /^\/api\/signing$/, async (req, res) => sendJson(res,200,{ ok:true, ...identity.visible(req) }));
+route('POST', /^\/api\/signing\/setup$/, async (req,res) => {
+  if (!identity.loopback(req)) return sendJson(res,403,{ok:false,error:'请在 Harness 所在电脑上启用员工签核'});
+  const account = identity.enroll(await readJson(req),true);
+  sendJson(res,201,{ok:true,actor:identity.startSession(req,res,account)});
+});
+route('POST', /^\/api\/signing\/login$/, async (req,res) => sendJson(res,200,{ok:true,actor:identity.login(req,res,await readJson(req))}));
+route('POST', /^\/api\/signing\/logout$/, async (req,res) => { identity.logout(req,res); sendJson(res,200,{ok:true}); });
+function requireManager(req) {
+  if (req.signer?.role === 'manager' || !identity.configured() && identity.loopback(req)) return;
+  throw Object.assign(new Error('该操作需要已登录的质量主管'),{status:403});
+}
+route('GET', /^\/api\/signing\/accounts$/, async (req,res) => { requireManager(req); sendJson(res,200,{ok:true,...identity.directoryView()}); });
+route('POST', /^\/api\/signing\/accounts$/, async (req,res) => {
+  if (req.signer?.role !== 'manager') return sendJson(res,403,{ok:false,error:'请先登录质量主管账号'});
+  sendJson(res,201,{ok:true,account:identity.publicAccount(identity.enroll(await readJson(req)))});
+});
+route('PUT', /^\/api\/signing\/accounts\/([a-f0-9-]+)\/password$/, async (req,res,id) => {
+  if (!req.signer) return sendJson(res,401,{ok:false,error:'请先登录员工账号'});
+  const account=identity.changePassword(req.signer,id,await readJson(req));
+  store.audit({user:req.signer.name,plugin:'员工签核',action:'更新员工登录凭据',params:{accountId:account.id}});
+  sendJson(res,200,{ok:true,self:account.id===req.signer.id});
+});
+route('POST', /^\/api\/signing\/delegations$/, async (req,res) => {
+  if (!req.signer) return sendJson(res,401,{ok:false,error:'请先登录员工账号'});
+  sendJson(res,201,{ok:true,row:identity.delegate(req.signer,await readJson(req))});
+});
+route('DELETE', /^\/api\/signing\/delegations\/([a-f0-9-]+)$/, async (req,res,id) => {
+  if (!req.signer) return sendJson(res,401,{ok:false,error:'请先登录员工账号'});
+  sendJson(res,200,{ok:true,row:identity.revoke(req.signer,id)});
+});
+route('POST', /^\/api\/backups$/, async (req,res) => {
+  requireManager(req);
+  const {id,filename,size}=backups.build();
+  sendJson(res,201,{ok:true,id,filename,size});
+});
+route('GET', /^\/api\/backups\/([a-f0-9-]+)$/, async (req,res,id) => {
+  requireManager(req);
+  const {file,filename,size}=backups.download(id);
+  res.writeHead(200,{'Cache-Control':'no-store','Content-Type':'application/octet-stream',
+    'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(filename),'Content-Length':size,'X-Content-Type-Options':'nosniff'});
+  fs.createReadStream(file).on('error',()=>res.destroy()).pipe(res);
+});
+route('POST', /^\/api\/backups\/restore\/prepare$/, async (req,res) => {
+  requireManager(req);
+  if (req.headers['content-type'] !== 'application/octet-stream') return sendJson(res,415,{ok:false,error:'请选择业务备份文件'});
+  const preview = await backups.receive(req,req.signer?.id || 'local');
+  sendJson(res,201,{ok:true,...preview});
+});
+route('DELETE', /^\/api\/backups\/restore\/([a-f0-9-]+)$/, async (req,res,id) => {
+  requireManager(req); backups.cancel(id,req.signer?.id || 'local'); sendJson(res,200,{ok:true});
+});
+route('POST', /^\/api\/backups\/restore\/([a-f0-9-]+)$/, async (req,res,id) => {
+  requireManager(req);
+  const input=await readJson(req);
+  if (input?.confirm !== '还原') return sendJson(res,400,{ok:false,error:'请输入「还原」确认替换当前业务数据'});
+  operations.stop();
+  let result;
+  try { result = backups.restore(id,req.signer); }
+  finally { operations.start(); }
+  sendJson(res,200,{ok:true,...result});
+});
+route('PUT', /^\/api\/audit\/retention$/, async (req,res) => {
+  requireManager(req);
+  const {days}=await readJson(req);
+  if (!Number.isSafeInteger(days) || days<1 || days>3650) return sendJson(res,400,{ok:false,error:'留存期限须为 1～3650 天'});
+  store.transaction(()=>store.setSetting('auditRetentionDays',days));
+  sendJson(res,200,{ok:true,archived:store.archiveAudit()});
+});
+
 route('GET', /^\/api\/operations\/schema\.js$/, async (req, res) => sendText(res, 200, fs.readFileSync(path.join(ROOT, 'src/lib/business.js'), 'utf8'), MIME['.js']));
 route('GET', /^\/api\/operations$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.summary() }));
 route('POST', /^\/api\/operations\/scan$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.scan() }));
@@ -160,13 +234,44 @@ route('POST', /^\/api\/operations\/preview$/, async (req, res) => sendJson(res, 
 route('POST', /^\/api\/operations\/accept$/, async (req, res) => sendJson(res, 200, { ok: true, ...operations.accept(await readJson(req)) }));
 route('POST', /^\/api\/operations\/cases$/, async (req, res) => sendJson(res, 201, { ok: true, row: operations.create(await readJson(req)) }));
 route('POST', /^\/api\/operations\/cases\/([^/]+)\/draft$/, async (req, res, id) => { const row = operations.requestDraft(id, await readJson(req)); operations.pump().catch((err) => console.error(err.message)); sendJson(res, 202, { ok: true, row }); });
-route('POST', /^\/api\/operations\/cases\/([^/]+)\/files$/, async (req, res, id) => sendJson(res, 201, { ok: true, ...operations.addFile(id, await readJson(req)) }));
+route('POST', /^\/api\/operations\/cases\/([^/]+)\/files$/, async (req,res,id) => {
+  const input=await readJson(req);
+  const signer=req.signer ? identity.signingActor(req.signer,input?.delegationId) : null;
+  sendJson(res,201,{ok:true,...operations.addFile(id,input,signer)});
+});
 route('GET', /^\/api\/operations\/cases\/([^/]+)\/files\/([^/]+)$/, async (req, res, id, fileId) => {
   const f = operations.getFile(id, fileId); const bytes = fs.readFileSync(f.path);
   res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(f.filename), 'X-Content-Type-Options': 'nosniff', 'Content-Length': bytes.length }); res.end(bytes);
 });
 route('GET', /^\/api\/operations\/cases\/([^/]+)$/, async (req, res, id) => sendJson(res, 200, { ok: true, row: operations.resolve(id) }));
-route('POST', /^\/api\/operations\/cases\/([^/]+)\/(plan|business|supplement|approve|revoke|submit|return)$/, async (req, res, id, action) => sendJson(res, 200, { ok: true, row: operations.act(id, action, await readJson(req)) }));
+route('POST', /^\/api\/operations\/cases\/([^/]+)\/(plan|business|supplement|approve|revoke|submit|return|library)$/, async (req,res,id,action) => {
+  const input=await readJson(req);
+  const signer=req.signer ? identity.signingActor(req.signer,input?.delegationId) : null;
+  if (action==='library') {
+    if (!Array.isArray(input.documentIds) || input.documentIds.length>12 || input.documentIds.some((v)=>typeof v!=='string')) {
+      return sendJson(res,400,{ok:false,error:'一次最多关联 12 份资料'});
+    }
+    const c=operations.resolve(id);
+    const retained=new Map((c.libraryRefs || []).map((ref)=>[ref.id,ref]));
+    const catalog=new Map(library.list().map((d)=>[d.id,d]));
+    input.refs=[...new Set(input.documentIds)].map((key)=>{
+      const doc=catalog.get(key);
+      if (retained.has(key)) return retained.get(key);
+      if (!doc || !doc.effective || doc.status!=='ready' || (doc.product && doc.product!==c.product) || (doc.process && doc.process!==c.location)) {
+        throw Object.assign(new Error('只能关联当前有效且适用于该工作单的资料'),{status:409});
+      }
+      const {id,name,documentNumber,revision,effectiveFrom,product,process}=doc;
+      return {id,name,documentNumber,revision,effectiveFrom,product,process};
+    });
+  }
+  if (action==='approve') {
+    const c=operations.resolve(id);
+    if (c.status==='plan_review' && (c.libraryRefs || []).some((ref)=>!library.usable(ref.id))) {
+      return sendJson(res,409,{ok:false,error:'方案引用的资料已失效，请在文件依据中选择当前有效版'});
+    }
+  }
+  sendJson(res,200,{ok:true,row:operations.act(id,action,input,signer)});
+});
 route('GET', /^\/api\/operations\/events$/, async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   const send = () => { if (!res.destroyed) res.write('data: ' + JSON.stringify({ revision: operations.summary().revision }) + '\n\n'); };
@@ -479,7 +584,7 @@ const WRITABLE = {
 };
 
 route('POST', /^\/api\/(qrqc|benefits|workflows)\/([^/]+)\/decision$/, async (req,res,col,id) =>
-  sendJson(res, 200, {ok:true,row:localWorkflows.decide(store,col,id,await readJson(req))}));
+  sendJson(res, 200, {ok:true,row:localWorkflows.decide(store,col,id,{...await readJson(req),...(req.signer ? {author:req.signer.name} : {})})}));
 route('POST', /^\/api\/members\/([^/]+)\/growth$/, async (req,res,id) =>
   sendJson(res, 201, {ok:true,row:localWorkflows.recordGrowth(store,id,await readJson(req))}));
 
@@ -526,6 +631,7 @@ Object.keys(WRITABLE).forEach((col) => {
     sendJson(res, 200, { ok: true, row: rec });
   });
   route('DELETE', new RegExp('^/api/' + col + '/([^/]+)$'), async (req, res, id) => {
+    if (col==='members' && identity.memberHasAccount(store.col('members').get(id)?.id)) return sendJson(res,409,{ok:false,error:'成员已绑定签核账号，请保留该成员记录'});
     const ok = store.col(col).remove(id);
     sendJson(res, 200, { ok, error: ok ? undefined : '未找到 ' + id });
   });
@@ -594,7 +700,8 @@ route('POST', /^\/api\/library$/, async (req, res) => {
 route('GET', /^\/api\/library\/search$/, async (req, res) => {
   allowLibraryAccess(req);
   const { q, id } = qs(req);
-  sendJson(res, 200, { ok: true, excerpts: library.search(q, { id }) });
+  const params = qs(req);
+  sendJson(res, 200, { ok: true, excerpts: library.search(q, { id, product: String(params.product || '').slice(0,80), process: String(params.process || '').slice(0,80) }) });
 });
 route('GET', /^\/api\/library\/([a-f0-9-]+)\/parts\/(\d+)$/, async (req, res, id, part) => {
   allowLibraryAccess(req);
@@ -615,6 +722,12 @@ route('GET', /^\/api\/library\/([a-f0-9-]+)\/download$/, async (req, res, id) =>
     'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Length': row.size });
   if (handle) await pipeline(handle.createReadStream(), res);
   else res.end(row.original);
+});
+route('PUT', /^\/api\/library\/([a-f0-9-]+)\/version$/, async (req,res,id) => {
+  requireManager(req);
+  const document=library.setVersion(id,await readJson(req));
+  store.audit({user:req.signer?.name || '本机使用者',plugin:'知识库',action:'更新文件版次',params:{id,revision:document.revision,state:document.revisionState}});
+  sendJson(res,200,{ok:true,document});
 });
 route('POST', /^\/api\/library\/([a-f0-9-]+)\/retry$/, async (req, res, id) => {
   allowLibraryAccess(req);
@@ -664,7 +777,7 @@ route('POST', /^\/api\/chat\/stream$/, async (req, res) => {
     if (libraryMode) {
       send({ type: 'library_search' });
       result = { ok: true, ...await knowledge.answer(library, runtime.model && runtime.llm, body.text.trim(), history,
-        AbortSignal.any([signal, AbortSignal.timeout(65000)])) };
+        AbortSignal.any([signal, AbortSignal.timeout(65000)]), {product: typeof body.product==='string' ? body.product.slice(0,80) : '', process: typeof body.process==='string' ? body.process.slice(0,80) : ''}) };
       if (signal.aborted) return;
       send({ type: 'content', text: result.content });
       send({ type: 'library_sources', sources: result.sources });
@@ -791,10 +904,12 @@ route('GET', /^\/api\/spc\/detail$/, async (req, res) => {
 });
 route('GET', /^\/api\/audit$/, async (req, res) => {
   const q = qs(req);
-  let rows = store.col('audit').all().slice().reverse();
+  const archived = q.archive === '1';
+  let rows = store.col(archived ? 'auditArchive' : 'audit').all().slice().reverse();
   if (q.plugin) rows = rows.filter((r) => r.plugin === q.plugin);
   if (q.user) rows = rows.filter((r) => r.user === q.user);
-  sendJson(res, 200, { ok: true, total: rows.length, rows: rows.slice(0, Number(q.limit || 100)) });
+  const offset=Math.max(0, Math.trunc(Number(q.offset)) || 0), limit=Math.min(500,Math.max(1,Math.trunc(Number(q.limit)) || 100));
+  sendJson(res,200,{ok:true,retentionDays:store.getSetting('auditRetentionDays',365),total:rows.length,rows:rows.slice(offset,offset+limit)});
 });
 
 /* ---------------- 导入导出 ---------------- */
@@ -955,26 +1070,41 @@ route('GET', /^\/api\/reports\/download\/(.+)$/, async (req, res, file) => {
 
 /* ---------------- 数据管理 ---------------- */
 route('POST', /^\/api\/data\/reset$/, async (req, res) => {
-  const body = await readJson(req);
+  await readJson(req);
+  const registeredMembers = identity.configured() ? store.col('members').all() : null;
   const seed = currentScale() === 'sme' ? require('./src/data/seed-sme').seedSme : require('./src/data/seed').seed;
-  // 保留 LLM 设置
-  const keep = (store.db.settings && store.db.settings.llm) || {};
-  Object.keys(store.db).forEach((k) => { if (Array.isArray(store.db[k])) store.db[k] = []; });
-  store.db.counters = {};
-  store.db.settings = {};
-  const info = seed(store);
-  store.db.meta.userCleared = false;
-  store.db.settings.llm = Object.assign(store.db.settings.llm || {}, keep);
-  store.saveSync(true, true);
-  operations.adoptExisting();
+  const info=store.transaction(()=>{
+    const keep=store.getSetting('llm',{});
+    const days=store.getSetting('auditRetentionDays',365);
+    const audit = store.col('audit').all();
+    const archive = store.col('auditArchive').all();
+    const counter=store.db.counters.audit || 0;
+    for (const key of Object.keys(store.db)) if (Array.isArray(store.db[key])) store.db[key]=[];
+    store.db.counters={};
+    store.db.settings={};
+    const seeded=seed(store,{persist:false});
+    if (registeredMembers) {
+      store.db.members=registeredMembers;
+      store.db.counters.member=Math.max(store.db.counters.member || 0,...registeredMembers.map((m)=>Number(m.id.split('-').at(-1)) || 0));
+    }
+    store.db.audit=audit;
+    store.db.auditArchive=archive;
+    store.db.counters.audit=Math.max(store.db.counters.audit || 0,counter);
+    store.db.meta.userCleared=false;
+    store.db.settings.llm={...(store.db.settings.llm || {}),...keep};
+    store.db.settings.auditRetentionDays=days;
+    store.audit({user:req.signer?.name || '本机使用者',plugin:'数据管理',action:'重建样例数据'});
+    operations.adoptExisting();
+    return seeded;
+  });
   sendJson(res, 200, { ok: true, seeded: info, message: '初始数据已重建（模型配置已保留）' });
 });
 route('POST', /^\/api\/data\/clear$/, async (req, res) => {
   const body = await readJson(req);
   const keep = (store.db.settings && store.db.settings.llm) || {};
   const fullClear = body.collections === undefined;
-  const cols = body.collections || ['issues', 'projects', 'measurements', 'knowledge', 'defects', 'qrqc', 'workflows', 'todos', 'benefits', 'reports', 'audit', 'chats', 'pendingActions', 'operationCases', 'operationEvents', 'operationImports', 'analysisRecords', 'materials', 'bom'];
-  if (!Array.isArray(cols) || cols.some((c) => typeof c !== 'string' || !Array.isArray(store.db[c]))) return sendJson(res, 400, { ok: false, error: '清空范围须为有效业务集合' });
+  const cols = body.collections || ['issues', 'projects', 'measurements', 'knowledge', 'defects', 'qrqc', 'workflows', 'todos', 'benefits', 'reports', 'chats', 'pendingActions', 'operationCases', 'operationEvents', 'operationImports', 'analysisRecords', 'materials', 'bom'];
+  if (!Array.isArray(cols) || cols.some((c) => typeof c !== 'string' || ['audit','auditArchive'].includes(c) || (identity.configured() && c==='members') || !Array.isArray(store.db[c]))) return sendJson(res, 400, { ok: false, error: '清空范围须为有效业务集合' });
   store.transaction(() => {
     cols.forEach((c) => { store.db[c] = []; });
     if (fullClear) {
@@ -984,6 +1114,7 @@ route('POST', /^\/api\/data\/clear$/, async (req, res) => {
     }
     store.db.settings = store.db.settings || {};
     store.db.settings.llm = Object.assign(store.db.settings.llm || {}, keep);
+    store.audit({user:req.signer?.name || '本机使用者',plugin:'数据管理',action:'清空业务数据',params:{collections:cols}});
   });
   sendJson(res, 200, { ok: true, cleared: cols, message: '已清空 ' + cols.length + ' 个集合' });
 });
@@ -1252,6 +1383,12 @@ function init() {
     const timer = setInterval(() => store.saveSync(), 5000);
     if (timer.unref) timer.unref();
     saveTimer = timer;
+    const snapshot = () => {
+      try { store.archiveAudit(); if (store.persist) store.snapshot(); }
+      catch (error) { console.error('[store] 定时快照失败：' + error.message); }
+    };
+    if (!fs.existsSync(store.file) || Date.now() - fs.statSync(store.file).mtimeMs >= 86400000) snapshot();
+    setInterval(snapshot,86400000).unref();
     const info = store.persist ? store.persist.info() : null;
     console.log('[qip-real-v3] 就绪：数据库=' + (info ? info.path : store.file) + '，报告目录=' + OUTPUT_DIR);
     return { firstRun, info };
@@ -1271,6 +1408,18 @@ function handle(req, res) {
       const m = match(req.method, pathname);
       if (!m) return sendJson(res, 404, { ok: false, error: '接口不存在：' + req.method + ' ' + pathname });
       try {
+        if (!['GET','HEAD'].includes(req.method)) identity.sameOrigin(req);
+        const publicAccess = ['/api/health','/api/operations/schema.js','/api/signing','/api/signing/setup','/api/signing/login','/api/signing/logout'].includes(pathname);
+        if (!publicAccess && identity.configured()) {
+          req.signer = identity.actor(req);
+          if (!req.signer) return sendJson(res,401,{ok:false,error:'请先登录员工账号'});
+          const staffWrite = /^\/api\/operations\/cases(?:$|\/[^/]+\/(?:submit|files)$)/.test(pathname)
+            || /^\/api\/signing\/delegations(?:\/|$)/.test(pathname)
+            || /^\/api\/signing\/accounts\/[a-f0-9-]+\/password$/.test(pathname);
+          if (req.signer.role === 'worker' && !['GET','HEAD'].includes(req.method) && !staffWrite) {
+            return sendJson(res,403,{ok:false,error:'该操作需要质量主管账号'});
+          }
+        }
         await m.handler(req, res, ...m.params);
       } catch (e) {
         console.error('[qip-real-v3] ' + pathname + ' 出错：', e);

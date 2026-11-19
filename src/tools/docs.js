@@ -1,5 +1,5 @@
 'use strict';
-const { projectProgress, taskRequirement } = require('../lib/business');
+const { projectProgress, taskRequirement, signerLabel } = require('../lib/business');
 /**
  * 文档与报表工具：让智能体产出"可交付物"
  * ------------------------------------------------------------------
@@ -86,7 +86,7 @@ define({
         blocks.push({type:'h1',text:labels[step]});
         const task = c?.tasks?.find((t) => t.key === step);
         if (task) blocks.push({type:'p',text:taskRequirement(task)});
-        if (accepted.length) blocks.push({type:'table',header:['执行结果','证据','复核人'],rows:accepted.map((s)=>[s.result,s.evidence,s.acceptedBy])});
+        if (accepted.length) blocks.push({type:'table',header:['执行结果','证据','提交人','复核人'],rows:accepted.map((s)=>[s.result,s.evidence,s.signature ? signerLabel(s.signature) : s.author,s.reviewSignature ? signerLabel(s.reviewSignature) : s.acceptedBy])});
         else {
           const key = {contain:'d3',cause:'d4',correct:'d5',verify:'d6'}[step];
           const saved = project[key];

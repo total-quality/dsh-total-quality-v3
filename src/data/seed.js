@@ -599,7 +599,7 @@ function buildDefects() {
 /* ------------------------------------------------------------------ */
 /* 主入口                                                              */
 /* ------------------------------------------------------------------ */
-function seed(store) {
+function seed(store, { persist = true } = {}) {
   const now = new Date();
   const iso = (d) => d.toISOString();
   const dayAgo = (n, h) => new Date(now.getTime() - n * 86400000 + (h || 0) * 3600000);
@@ -798,7 +798,7 @@ function seed(store) {
     });
   }
 
-  store.saveSync(true);
+  if (persist) store.saveSync(true);
   return {
     issues: store.db.issues.length,
     projects: store.db.projects.length,

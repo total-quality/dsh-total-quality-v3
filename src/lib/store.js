@@ -68,6 +68,8 @@ class Store {
     this._dirty = false;
     this._timer = null;
     this._listeners = new Set();
+    this._measurementDirty = false;
+    this.measurementRevision = 0;
   }
 
   async init(dataDir, opts) {
@@ -165,6 +167,7 @@ class Store {
     if (!d.id) d.id = this.nextId(collection, doc);
     if (!d.createdAt) d.createdAt = new Date().toISOString();
     d.updatedAt = d.createdAt;
+    this.beforeWrite(collection);
     this.db[collection].push(d);
     if (!deferTouch) this.touch();
     return d;
@@ -174,6 +177,7 @@ class Store {
     const doc = this.resolve(collection, id);
     if (!doc) return null;
     this.guardManaged(collection, doc);
+    this.beforeWrite(collection);
     Object.assign(doc, patch, { updatedAt: new Date().toISOString() });
     this.touch();
     return doc;
@@ -182,6 +186,7 @@ class Store {
   patchNested(collection, id, pathStr, value) {
     const doc = this.col(collection).get(id);
     if (!doc) return null;
+    this.beforeWrite(collection);
     const parts = pathStr.split('.');
     let cur = doc;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -199,6 +204,7 @@ class Store {
     const doc = this.resolve(collection, id);
     if (!doc) return false;
     this.guardManaged(collection, doc);
+    this.beforeWrite(collection);
     arr.splice(arr.indexOf(doc), 1);
     this.touch();
     return true;
@@ -236,6 +242,7 @@ class Store {
 
   /** 全量替换某集合（用于导入/重置） */
   replace(collection, docs) {
+    this.beforeWrite(collection);
     this.db[collection] = docs || [];
     this.touch();
     return this.db[collection].length;
@@ -248,10 +255,21 @@ class Store {
       entry
     );
     this.db.audit.push(rec);
-    // 审计库只保留最近 5000 条，避免无限膨胀
-    if (this.db.audit.length > 5000) this.db.audit.splice(0, this.db.audit.length - 5000);
+
     this.touch();
     return rec;
+  }
+
+  archiveAudit() {
+    const until = Date.now() - this.getSetting('auditRetentionDays',365) * 86400000;
+    const expired = this.db.audit.filter((entry) => Date.parse(entry.ts) < until);
+    if (!expired.length) return 0;
+    const ids = new Set(expired.map((entry) => entry.id));
+    this.transaction(() => {
+      this.db.auditArchive = [...(this.db.auditArchive || []), ...expired];
+      this.db.audit = this.db.audit.filter((entry) => !ids.has(entry.id));
+    });
+    return expired.length;
   }
 
   // ---------------- 持久化 ----------------
@@ -266,47 +284,71 @@ class Store {
     if (this._timer.unref) this._timer.unref();
   }
 
+  beforeWrite(collection) {
+    if (collection !== 'measurements') return;
+    if (this._rollback && this._rollback.measurements === this.db.measurements) {
+      this._rollback.measurements = structuredClone(this.db.measurements);
+    }
+    this._measurementDirty = true;
+    this.measurementRevision++;
+  }
+
   transaction(fn) {
     if (this._inTransaction) return fn();
-    const before = structuredClone(this.db);
+    const { measurements, ...other } = this.db;
+    const before = { ...structuredClone(other), measurements };
+    this._rollback = before;
     const dirty = this._dirty;
+    const measurementDirty = this._measurementDirty;
+    const measurementRevision = this.measurementRevision;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._inTransaction = true;
     let committed = false;
     try {
       const result = fn();
       if (result && typeof result.then === 'function') throw new Error('事务中不允许异步操作');
-      this.saveSync(true, true);
+      if (this.db.measurements !== measurements && !this._measurementDirty) {
+        this._measurementDirty = true;
+        this.measurementRevision++;
+      }
+      this.saveSync(true, true, false);
       committed = true;
       return result;
     } catch (err) {
       this.db = before;
       this._dirty = dirty;
+      this._measurementDirty = measurementDirty;
+      this.measurementRevision = measurementRevision;
+      if (dirty) this.touchAfterTransaction = true;
       throw err;
-    } finally { this._inTransaction = false; if (committed) this.emit(); }
+    } finally {
+      this._rollback = null;
+      this._inTransaction = false;
+      if (this.touchAfterTransaction) { this.touchAfterTransaction = false; this.touch(); }
+      if (committed) this.emit();
+    }
   }
 
-  saveSync(force, strict = false) {
+  saveSync(force, strict = false, scanMeasurements = !!force) {
     if ((!this._dirty && !force) || !this.file) return;
     this.db.meta.updatedAt = new Date().toISOString();
     try {
-      // ① 全部业务数据写入 SQLite（权威存储，事务提交）
-      if (this.persist) this.persist.save(this.db);
-      // ② 同时留一份 JSON 快照，便于备份/人工核对/迁移
-      try {
-        const tmp = this.file + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(this.db), 'utf8');
-        fs.renameSync(tmp, this.file);
-      } catch (err) {
-        if (!this.persist) throw err;
-        console.error('[store] SQLite 已保存，JSON 备份更新失败：' + err.message);
-      }
+      if (this.persist) this.persist.save(this.db, { scanMeasurements: scanMeasurements || this._measurementDirty });
+      else this.snapshot();
+      if (scanMeasurements) this.measurementRevision++;
+      this._measurementDirty = false;
       this._dirty = false;
       this.emit();
     } catch (e) {
       console.error('[store] 保存失败：' + e.message);
       if (strict) throw e;
     }
+  }
+
+  snapshot() {
+    const tmp = this.file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(this.db), 'utf8');
+    fs.renameSync(tmp, this.file);
   }
 
   // ---------------- 变更订阅 ----------------

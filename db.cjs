@@ -2,7 +2,7 @@
 /**
  * SQLite 持久层（node:sqlite 内置驱动，零第三方依赖）
  * ------------------------------------------------------------------
- * 所有业务数据写入 SQLite 数据库（权威存储）；同时由 store.js 留一份 JSON 快照便于备份/核对。
+ * SQLite 按记录持久化业务数据。全量 JSON 快照由宿主定时生成。
  *
  * 表结构（关系表 + JSON 文档表混用，兼顾"真数据库"与"字段灵活"）：
  *   meta(key, value)                平台元信息 / 计数器 / 设置（JSON 文本）
@@ -120,22 +120,24 @@ function open(file) {
   const st = {
     metaSet: db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)'),
     metaGet: db.prepare('SELECT value FROM meta WHERE key = ?'),
-    recDel: db.prepare('DELETE FROM records'),
+    recDel: db.prepare('DELETE FROM records WHERE collection=? AND id=?'),
     recIns: db.prepare('INSERT OR REPLACE INTO records(collection, ordinal, id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'),
-    recAll: db.prepare('SELECT collection, id, payload FROM records ORDER BY collection, ordinal'),
-    setDel: db.prepare('DELETE FROM settings'),
+    recAll: db.prepare('SELECT collection, ordinal, id, payload FROM records ORDER BY collection, ordinal'),
+    setDel: db.prepare('DELETE FROM settings WHERE path=?'),
     setIns: db.prepare('INSERT OR REPLACE INTO settings(path, value) VALUES (?, ?)'),
     setAll: db.prepare('SELECT path, value FROM settings'),
-    meaDel: db.prepare('DELETE FROM measurements'),
+    meaDel: db.prepare('DELETE FROM measurements WHERE id=?'),
     meaIns: db.prepare(`INSERT OR REPLACE INTO measurements
       (id, char_id, char_name, model, workshop, station, ts, value, usl, lsl, unit, shift, batch, supplier, operator, vin, source)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-    audDel: db.prepare('DELETE FROM audit_log'),
+    audDel: db.prepare('DELETE FROM audit_log WHERE id=?'),
     audIns: db.prepare(`INSERT OR REPLACE INTO audit_log
       (id, ts, user, plugin, action, params, result_summary, purpose) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-    repDel: db.prepare('DELETE FROM reports'),
+    repDel: db.prepare('DELETE FROM reports WHERE id=?'),
     repIns: db.prepare('INSERT OR REPLACE INTO reports(id, type, title, period, file, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
   };
+  let recordCache = new Map();
+  let settingsCache = new Map();
   const adapter = {
     engine: 'sqlite',
     file,
@@ -144,7 +146,10 @@ function open(file) {
       const hasMeta = st.metaGet.get('state');
       if ((!n || Number(n.c) === 0) && !hasMeta) return null;
       const state = { meta: {}, counters: {}, settings: {} };
+      settingsCache = new Map();
+      recordCache = new Map();
       for (const row of st.setAll.all()) {
+        settingsCache.set(row.path, row.value);
         const parts = String(row.path).split('.');
         let cur = state.settings;
         for (let i = 0; i < parts.length - 1; i++) {
@@ -165,6 +170,8 @@ function open(file) {
       }
       for (const row of st.recAll.all()) {
         const collection = String(row.collection);
+        if (!recordCache.has(collection)) recordCache.set(collection, new Map());
+        recordCache.get(collection).set(row.id, { ordinal: row.ordinal, payload: row.payload });
         if (!Array.isArray(state[collection])) state[collection] = [];
         try {
           state[collection].push(JSON.parse(row.payload));
@@ -172,55 +179,74 @@ function open(file) {
       }
       return state;
     },
-    save(state) {
+    save(state, { scanMeasurements = true } = {}) {
+      const chars = new Map((state.spcChars || []).map((ch) => [ch.id, ch]));
       const now = new Date().toISOString();
-      const chars = {};
-      for (const ch of state.spcChars || []) chars[ch.id] = ch;
-      const flatSettings = flatten(state.settings || {}, '', {});
+      const settings = new Map(Object.entries(flatten(state.settings || {}, '', {}))
+        .map(([key, value]) => [key, JSON.stringify(value) ?? 'null']));
+      const next = new Map(recordCache);
+      const changed = new Map();
+      const names = new Set([...recordCache.keys(), ...Object.keys(state).filter((key) => !SKIP.has(key) && Array.isArray(state[key]))]);
+      for (const collection of names) {
+        if (collection === 'measurements' && !scanMeasurements) continue;
+        const prior = recordCache.get(collection) || new Map();
+        const current = new Map();
+        const edits = [];
+        for (const [ordinal, doc] of (state[collection] || []).entries()) {
+          if (!doc || typeof doc !== 'object') continue;
+          const id = String(doc.id ?? collection + '-' + ordinal);
+          const payload = JSON.stringify(doc);
+          const old = prior.get(id);
+          current.set(id, { ordinal, payload });
+          if (!old || old.payload !== payload || old.ordinal !== ordinal) edits.push({ id, ordinal, payload, doc, changed: old?.payload !== payload });
+        }
+        const removed = [...prior.keys()].filter((id) => !current.has(id));
+        if (edits.length || removed.length) changed.set(collection, { edits, removed });
+        next.set(collection, current);
+      }
+      const changedSpecs = new Set();
+      for (const edit of changed.get('spcChars')?.edits || []) {
+        const old = recordCache.get('spcChars')?.get(edit.id);
+        const prior = old && JSON.parse(old.payload);
+        if (!prior || ['name','model','workshop','station','unit','lsl','usl'].some((field) => prior[field] !== edit.doc[field])) changedSpecs.add(edit.id);
+      }
+      for (const id of changed.get('spcChars')?.removed || []) changedSpecs.add(id);
+      const writeMeasurement = (m) => {
+        const ch = chars.get(m.charId) || {};
+        st.meaIns.run(String(m.id), m.charId || null, m.charName || ch.name || null, m.model || ch.model || null,
+          m.workshop || ch.workshop || null, m.station || ch.station || null, m.ts || null,
+          Number.isFinite(Number(m.value)) ? Number(m.value) : null,
+          ch.usl === undefined ? null : Number(ch.usl), ch.lsl === undefined ? null : Number(ch.lsl),
+          m.unit || ch.unit || null, m.shift || null, m.batch || null, m.supplier || null, m.operator || null, m.vin || null, m.source || null);
+      };
+      const mirrorDelete = { measurements: st.meaDel, audit: st.audDel, reports: st.repDel };
       db.exec('BEGIN IMMEDIATE');
       try {
         st.metaSet.run('state', JSON.stringify({ meta: state.meta || {}, counters: state.counters || {} }));
         st.metaSet.run('updatedAt', now);
-        st.metaSet.run('engine', 'sqlite (' + (db.prepare('SELECT sqlite_version() AS v').get().v || '') + ')');
-        st.setDel.run();
-        for (const [key, value] of Object.entries(flatSettings)) {
-          st.setIns.run(key, typeof value === 'string' ? value : JSON.stringify(value));
-        }
-        st.recDel.run();
-        for (const [collection, rows] of Object.entries(state)) {
-          if (SKIP.has(collection) || !Array.isArray(rows)) continue;
-          for (let i = 0; i < rows.length; i++) {
-            const doc = rows[i];
-            if (!doc || typeof doc !== 'object') continue;
-            const id = String(doc.id === undefined ? collection + '-' + i : doc.id);
-            st.recIns.run(collection, i, id, JSON.stringify(doc), doc.createdAt || null, doc.updatedAt || null);
+        for (const key of settingsCache.keys()) if (!settings.has(key)) st.setDel.run(key);
+        for (const [key, value] of settings) if (settingsCache.get(key) !== value) st.setIns.run(key, value);
+        for (const [collection, { edits, removed }] of changed) {
+          for (const id of removed) {
+            st.recDel.run(collection, id);
+            mirrorDelete[collection]?.run(id);
+          }
+          for (const { id, ordinal, payload, doc, changed } of edits) {
+            st.recIns.run(collection, ordinal, id, payload, doc.createdAt || null, doc.updatedAt || null);
+            if (!changed) continue;
+            if (collection === 'measurements' && !changedSpecs.has(doc.charId)) writeMeasurement(doc);
+            if (collection === 'audit') st.audIns.run(id, doc.ts || null, doc.user || null, doc.plugin || null, doc.action || null,
+              JSON.stringify(doc.params ?? null), doc.resultSummary || null, doc.purpose || null);
+            if (collection === 'reports') st.repIns.run(id, doc.type || null, doc.title || null, doc.period || null,
+              doc.file || doc.path || null, doc.createdAt || null);
           }
         }
-        st.meaDel.run();
-        for (const m of state.measurements || []) {
-          const ch = chars[m.charId] || {};
-          st.meaIns.run(
-            String(m.id || ''), m.charId || null, m.charName || ch.name || null, m.model || ch.model || null,
-            m.workshop || ch.workshop || null, m.station || ch.station || null, m.ts || null,
-            Number.isFinite(Number(m.value)) ? Number(m.value) : null,
-            ch.usl === undefined ? null : Number(ch.usl), ch.lsl === undefined ? null : Number(ch.lsl),
-            m.unit || ch.unit || null, m.shift || null, m.batch || null, m.supplier || null,
-            m.operator || null, m.vin || null, m.source || null,
-          );
-        }
-        st.audDel.run();
-        for (const a of state.audit || []) {
-          st.audIns.run(String(a.id || ''), a.ts || null, a.user || null, a.plugin || null, a.action || null,
-            JSON.stringify(a.params === undefined ? null : a.params), a.resultSummary || null, a.purpose || null);
-        }
-        st.repDel.run();
-        for (const r of state.reports || []) {
-          st.repIns.run(String(r.id || ''), r.type || null, r.title || null, r.period || null,
-            r.file || r.path || null, r.createdAt || null);
-        }
+        if (changedSpecs.size) for (const m of state.measurements || []) if (changedSpecs.has(m.charId)) writeMeasurement(m);
         db.exec('COMMIT');
+        recordCache = next;
+        settingsCache = settings;
       } catch (err) {
-        try { db.exec('ROLLBACK'); } catch (_) { /* ignore */ }
+        try { db.exec('ROLLBACK'); } catch (_) {}
         throw err;
       }
       return true;

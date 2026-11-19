@@ -96,10 +96,12 @@
           })) +
         '<p class="library-tip">MES、质检和财务分组使用本站已录入或导入的记录。外部系统接入需单独适配。</p>')}
 
+      ${global.Signing.cards()}
+
       ${card('④ 数据管理', '本地数据仓：' + Object.entries(counts).map(([k, v]) => k + ' ' + v).join(' · '),
         `${dbStatus ? `<div style="border:1px solid #c9d8f5;background:#f7faff;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.9;margin-bottom:12px;">
           <b>权威数据库：</b>SQLite <code>${esc(dbStatus.path)}</code>　${Math.round(dbStatus.sizeBytes / 1024)} KB　SQLite ${esc(dbStatus.sqliteVersion || '')}<br>
-          <b>表行数：</b>${Object.entries(dbStatus.tables || {}).map(([k, v]) => k + ' ' + v).join(' · ')}　（另有 JSON 快照用于备份）
+          <b>表行数：</b>${Object.entries(dbStatus.tables || {}).map(([k, v]) => k + ' ' + v).join(' · ')}　（日常按记录保存，JSON 快照定时更新）
         </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
           ${act('导入 Excel / CSV（测量数据）', 'importFile', { target: 'measurements' }, 'btn btn-primary')}

@@ -160,7 +160,7 @@
             ['温度', llm.temperature], ['最大 Token', llm.maxTokens],
             ['最大工具轮次', (settings.agent || {}).maxRounds || 8], ['自动工具调用', (settings.agent || {}).autoTool !== false ? '开启' : '关闭'],
             ['结论引用出处', '启用'], ['敏感操作人工确认', '启用'],
-            ['敏感信息脱敏', (settings.agent || {}).maskSensitive !== false ? '开启（VIN/手机号）' : '关闭'], ['全程审计', '开启（保留最近 5000 条）'],
+            ['敏感信息脱敏', (settings.agent || {}).maskSensitive !== false ? '开启（VIN/手机号）' : '关闭'], ['全程审计', '开启（按保留期归档）'],
             ['数据存储', '本机 SQLite', true],
           ]))}
       </div>

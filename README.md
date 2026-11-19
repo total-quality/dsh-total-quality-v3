@@ -42,7 +42,7 @@
 Web 版可用以下命令安装：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.13/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.14/dsh-total-quality-v3.tgz
 ```
 
 ## 业务场景
@@ -113,5 +113,11 @@ dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-
 - [反馈问题或建议](https://github.com/total-quality/dsh-total-quality-v3/issues)时，可以附上使用场景、所在页面和操作步骤。
 
 ## 版本发布
+
+## 班组试点
+
+- 在「系统 → 系统设置 → 员工签核」绑定首位质量主管，再为班组成员创建登录账号。执行人使用自己的账号提交，主管在原工作单复核或退回。需要代办时，由原签核人设置代理、原因和截止日期。
+- 在「知识库文件」上传指导书后登记文件编号、版次、生效日和适用范围。新版正式生效后，助手日常查询使用有效版。已批准工作单可回看原来引用的版次。
+- 在「系统设置 → 业务备份与审计归档」创建并下载 `.qipbackup`。在同版式的独立空间可预检并还原业务数据，确认还原前会自动生成当前数据备份。员工账号和模型凭据在各自设备重新配置。
 
 [下载最新版](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) · [查看更新记录](CHANGELOG.md) · [MIT 许可证](LICENSE.md)

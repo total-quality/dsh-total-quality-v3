@@ -42,7 +42,7 @@ Consider a batch of bushings with an oversize outside diameter. Measurements are
 For the web profile, you can also install from a terminal:
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.13/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.14/dsh-total-quality-v3.tgz
 ```
 
 ## Use Cases

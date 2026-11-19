@@ -1,6 +1,6 @@
 {
   "name": "dsh-total-quality-v3",
-  "version": "3.0.13",
+  "version": "3.0.14",
   "private": false,
   "type": "module",
   "description": "全质开源质量平台2：独立的 V3 质量运营插件，测量预检与筛查、方案准备、任务派发、执行复核、结案报告与经验沉淀；保留右侧微信服务二维码。",

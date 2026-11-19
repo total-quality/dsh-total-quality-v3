@@ -122,12 +122,26 @@ function taskRequirement(task) {
     task.planAction && task.planAction !== task.instruction ? '批准的处理动作：' + task.planAction : '',
     task.verification ? '验证要求：' + task.verification : ''].filter(Boolean).join('\n');
 }
-function planRevisionText(revision) {
-  return [revision.legacy ? '历史版本，按旧记录已保留的执行指令回溯' : '批准人：' + revision.approvedBy + ' · ' + revision.approvedAt,
-    '处理动作：' + revision.action, revision.verification ? '验证要求：' + revision.verification : '',
-    '责任人：' + revision.owner, '期限：' + revision.due].filter(Boolean).join('\n');
+function signerLabel(signature) {
+  if (!signature) return '';
+  const name = signature.name || '历史操作人';
+  if (!signature.verified) return name + '（未绑定员工账号）';
+  const account = name + '（' + signature.username + '）';
+  return signature.actingFor ? account + ' 代 ' + signature.actingFor.name + '（' + signature.actingFor.username + '）' : account;
 }
-return {projectStageCode,projectIsClosed,activeProjects,projectProgress,taskRequirement,planRevisionText,businessRoutes,businessFields,quantityFields,changeFields,businessDefault,normalizeBusiness,assessBusiness,businessSummary,demoBusiness};})();
+function signatureSummary(signature) {
+  return [signature.at, signature.label || signature.action, signature.stage, signerLabel(signature),
+    signature.delegationReason, signature.reason].filter(Boolean).join(' · ');
+}
+function referenceLabel(ref) {
+  return [ref.documentNumber, ref.revision && ref.revision + ' 版', ref.name, ref.effectiveFrom && '生效 ' + ref.effectiveFrom, ref.id].filter(Boolean).join(' · ');
+}
+function planRevisionText(revision) {
+  return [revision.legacy ? '历史版本，按旧记录已保留的执行指令回溯' : '批准人：' + (revision.signature ? signerLabel(revision.signature) : revision.approvedBy) + ' · ' + revision.approvedAt,
+    '处理动作：' + revision.action, revision.verification ? '验证要求：' + revision.verification : '',
+    '责任人：' + revision.owner, '期限：' + revision.due, ...(revision.libraryRefs || []).map(referenceLabel)].filter(Boolean).join('\n');
+}
+return {projectStageCode,projectIsClosed,activeProjects,projectProgress,taskRequirement,planRevisionText,signerLabel,signatureSummary,referenceLabel,businessRoutes,businessFields,quantityFields,changeFields,businessDefault,normalizeBusiness,assessBusiness,businessSummary,demoBusiness};})();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = QBusiness;
 else globalThis.QBusiness = QBusiness;

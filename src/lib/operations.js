@@ -31,11 +31,11 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
   const owner = (value) => people().includes(value) ? value : (people()[0] || '待指定');
   const tx = (fn) => store.transaction(fn);
   const events = () => store.col('operationEvents');
-  function event(c, message, automatic = true) {
-    const at = clock(); if (c) { c.updatedAt = at; c.version++; c.history.push({ at, text: message, automatic }); }
-    events().insert({ caseId: c?.id || '', text: message, automatic, at });
+  function event(c, message, automatic = true, signature = null) {
+    const at = clock(); if (c) { c.updatedAt = at; c.version++; c.history.push({ at, text: message, automatic, ...(signature ? { signature } : {}) }); }
+    events().insert({ caseId: c?.id || '', text: message, automatic, at, ...(signature ? { signature } : {}) });
     if (events().all().length > 500) store.db.operationEvents = events().all().slice(-500);
-    store.audit({ user: automatic ? '自动流程' : '管理者', plugin: '质量运营', action: message, params: { caseId: c?.id || '' }, resultSummary: c?.title || '' });
+    store.audit({ user: automatic ? '自动流程' : signature ? Business.signerLabel(signature) : '管理者', plugin: '质量运营', action: message, params: { caseId: c?.id || '', ...(signature ? { signature } : {}) }, resultSummary: c?.title || '' });
   }
   function current(c) { return c.tasks[c.stage] || null; }
   function resolve(id) { const c = store.col('operationCases').get(id); if (!c) fail('工作单不存在', 404); return c; }
@@ -100,9 +100,9 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     for (const task of c.tasks) task.planVersion = legacy.version;
     for (const sub of c.submissions) sub.planVersion = legacy.version;
   }
-  function approvePlan(c, author) {
+  function approvePlan(c, author, signature) {
     const revisions = c.planRevisions ||= [];
-    const revision = { ...clone(c.plan), version: (revisions.at(-1)?.version || 0) + 1, approvedBy: author, approvedAt: clock() };
+    const revision = { ...clone(c.plan), version: (revisions.at(-1)?.version || 0) + 1, approvedBy: author, approvedAt: clock(), signature, libraryRefs: clone(c.libraryRefs || []) };
     revisions.push(revision);
     const steps = c.kind === 'application' ? STEPS.slice(2) : STEPS;
     if (!c.tasks.length) c.tasks = steps.map(([key, title]) => ({ key, title }));
@@ -110,6 +110,7 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
       if (i < c.stage || task.status === 'done') continue;
       Object.assign(task, {
         owner: revision.owner,
+        ownerMemberId: store.col('members').one((m) => m.name === revision.owner)?.id,
         due: new Date(Date.parse(revision.due) + (i - c.stage) * 48 * 3600000).toISOString(),
         status: i === c.stage ? 'active' : 'waiting',
         planVersion: revision.version,
@@ -135,9 +136,12 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
       for (const s of c.submissions.filter((v) => v.taskKey === task.key)) {
         blocks.push({ type: 'p', text: [s.author + ' / ' + s.createdAt,
           s.planVersion ? '提交采用方案版本 ' + s.planVersion : '历史提交',
-          s.result, '验证：' + s.evidence, '复核：' + (s.acceptedBy || s.returnNote || '待复核')].join('\n') });
+          s.signature ? '提交：' + Business.signerLabel(s.signature) : '',
+          s.result, '验证：' + s.evidence, '复核：' + (s.reviewSignature ? Business.signerLabel(s.reviewSignature) : s.acceptedBy || s.returnNote || '待复核')].join('\n') });
       }
     }
+    if (c.libraryRefs?.length) blocks.push({ type: 'h2', text: '文件依据' }, ...c.libraryRefs.map((ref) => ({ type: 'p', text: Business.referenceLabel(ref) })));
+    if (c.signatures?.length) blocks.push({ type: 'h2', text: '签核记录' }, ...c.signatures.map((s) => ({ type: 'p', text: Business.signatureSummary(s) })));
     blocks.push({ type: 'h2', text: '业务追溯与验证' }, { type: 'p', text: Business.businessSummary(c.business, c) });
     const buf = office.docxWrite(blocks), filename = 'operation-' + hash(c.id).slice(0, 16) + '.docx';
     fs.mkdirSync(outputDir, { recursive: true }); fs.writeFileSync(path.join(outputDir, filename), buf);
@@ -145,10 +149,22 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     if (!rec) rec = store.col('reports').insert({ operationsId: c.id, type: '质量工作单', title: c.title + ' · 处理报告' });
     Object.assign(rec, { file: filename, path: path.join(outputDir, filename), createdAt: clock(), downloadUrl: '/qip-real-v3/api/reports/download/' + filename }); c.reportId = rec.id;
   }
-  function act(id, action, input) {
-    requireObject(input); const c = resolve(id); version(c, input); const author = actor(input);
+  function verifyAssignee(c, principal) {
+    if (!principal) return;
+    const task = current(c);
+    const assigned = task?.ownerMemberId || store.col('members').one((m)=>m.name === task?.owner)?.id;
+    if (!assigned || (principal.actingFor?.memberId || principal.memberId) !== assigned) fail('请由任务责任人或其授权代理提交',403);
+  }
+  function act(id, action, input, principal = null) {
+    requireObject(input); const c = resolve(id); version(c, input);
+    const author = principal?.name || actor(input);
+    const signature = { action, at: clock(), stage: current(c)?.title || '', verified: !!principal, name: author,
+      ...(principal ? {accountId:principal.id, memberId:principal.memberId, username:principal.username, actingFor:principal.actingFor,
+        delegationId:principal.delegationId, delegationReason:principal.delegationReason} : {}) };
+    const signed = (message) => event(c, message, false, signature);
     return tx(() => {
       preserveLegacyPlan(c);
+      if (['approve','revoke','submit','return'].includes(action)) (c.signatures ||= []).push(signature);
       if (action === 'plan') {
         if (!['plan_review', 'needs_info'].includes(c.status)) fail('请先取消方案批准后再调整');
         const p = input.plan || {}; requireObject(p);
@@ -156,6 +172,10 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
         const due = p.due || c.plan.due; if (!Number.isFinite(Date.parse(due)) || Date.parse(due) <= Date.parse(clock())) fail('截止时间须晚于当前时间');
         if (!['A', 'B', 'C'].includes(input.risk || c.risk)) fail('风险等级无效');
         c.plan = { ...c.plan, action: text(p.action, '处理动作', 10), verification: text(p.verification || c.plan.verification, '验证要求', 5), owner: who, due: new Date(due).toISOString() }; c.owner = who; c.risk = input.risk || c.risk; event(c, author + '调整处理方案', false);
+      } else if (action === 'library') {
+        if (c.status !== 'plan_review') fail('请在方案待确认时调整依据');
+        c.libraryRefs = clone(input.refs);
+        signed(author + '更新工作单文件依据');
       } else if (action === 'business') {
         if (c.status === 'closed') fail('已归档工作单不可改写');
         const b = Business.normalizeBusiness(input.business, c); if (c.tasks.length && b.route !== c.business.route) fail('执行已开始，不可变更业务路径'); c.business = b; event(c, author + '保存业务关联与验证记录', false);
@@ -166,32 +186,36 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
           if (c.missing.length) fail('请先补齐列出的资料');
           if (!people().includes(c.owner)) fail('请先指定团队责任人');
           if (Date.parse(c.plan.due) <= Date.parse(clock())) fail('方案期限已过，请调整期限');
-          const approvedVersion = approvePlan(c, author);
+          const approvedVersion = approvePlan(c, author, signature);
+          signature.label = '批准方案 V' + approvedVersion;
           if (!c.projectId) { const p = store.col('projects').insert({ title: c.title, issueId: c.issueId, model: c.product, workshop: c.location, owner: c.owner, severity: c.risk, operationsId: c.id, method: '8D', stageIndex: 2, progress: 0 }); c.projectId = p.id; }
-          event(c, author + '批准方案版本 ' + approvedVersion + '，已更新当前及后续任务', false);
+          signed(author + '批准方案版本 ' + approvedVersion + '，已更新当前及后续任务');
         } else if (c.status === 'result_review') {
           const sub = c.submissions.at(-1); if (!sub || sub.taskKey !== current(c)?.key || sub.returnNote || sub.acceptedBy) fail('当前阶段没有有效的待复核提交');
-          sub.acceptedBy = author; sub.acceptedAt = clock(); c.returnNote = ''; current(c).status = 'done'; c.stage++; c.status = c.stage === c.tasks.length ? 'close_review' : 'executing'; if (current(c)) current(c).status = 'active'; event(c, author + '确认执行结果，已自动推进下一步', false);
+          signature.label = '复核通过'; sub.reviewSignature = signature; sub.acceptedBy = author; sub.acceptedAt = clock(); c.returnNote = ''; current(c).status = 'done'; c.stage++; c.status = c.stage === c.tasks.length ? 'close_review' : 'executing'; if (current(c)) current(c).status = 'active'; signed(author + '确认执行结果，已自动推进下一步');
         } else if (c.status === 'close_review') {
           if (!c.tasks.length || !c.tasks.every((t) => t.status === 'done')) fail('执行阶段尚未完成');
           const gate = Business.assessBusiness(c.business, c); if (c.business.enforce && !gate.gateReady) fail('结案资料还需补充：' + [...gate.invalid, ...gate.missing].join('；'));
           closeEvidence(c);
-          c.status = 'closed'; c.closedAt = clock(); c.closedBy = author; event(c, author + '确认结案', false);
+          c.status = 'closed'; c.closedAt = clock(); c.closedBy = author; signature.label = '批准结案'; c.closedSignature = signature; signed(author + '确认结案');
           if (policy().autoReport) report(c);
           if (policy().autoKnowledge && !store.col('knowledge').one((k) => k.operationsId === c.id)) { const content = c.description + '\n处理：' + c.plan.action + '\n' + c.submissions.filter((s) => s.acceptedBy).map((s) => s.result + '\n验证：' + s.evidence).join('\n'); store.col('knowledge').insert({ operationsId: c.id, issueId: c.issueId, projectId: c.projectId, title: c.title + ' · 处置经验', content, type: '经验卡', author, tags: [c.location, '已结案'].filter(Boolean), source: c.number }); event(c, '已自动整理经验卡并关联原工作单'); }
         } else fail('当前状态不可批准');
       } else if (action === 'revoke') {
         if (c.status !== 'executing') fail('只有执行中的方案可以取消批准');
-        c.status = 'plan_review'; current(c).status = 'waiting'; event(c, author + '取消方案批准，暂停当前任务并保留执行历史', false);
+        c.status = 'plan_review'; current(c).status = 'waiting'; signature.label = '撤销方案批准'; signed(author + '取消方案批准，暂停当前任务并保留执行历史');
       } else if (action === 'submit') {
         if (c.status !== 'executing' || !current(c)) fail('当前没有可提交的执行任务');
         const result = text(input.result, '实际执行结果', 15), evidence = text(input.evidence, '验证方式与证据', 10);
         if (/^(\d+|已完成|完成|测试|test)[。.!\s]*$/i.test(result)) fail('请填写实际动作与范围，不能仅填写占位内容');
-        const who = text(input.author, '提交人', 1, 80); if (!people().includes(who)) fail('请选择已有团队成员');
+        const who = principal?.name || text(input.author, '提交人', 1, 80);
+        if (!people().includes(who)) fail('请选择已有团队成员');
+        verifyAssignee(c, principal);
+        signature.label = '提交执行结果';
         const files = input.files || []; if (!Array.isArray(files) || files.length > 8 || files.some((id) => !c.files.some((f) => f.id === id))) fail('附件不属于当前工作单');
-        c.submissions.push({ id: crypto.randomUUID(), taskKey: current(c).key, planVersion: current(c).planVersion, result, evidence, author: who, files, createdAt: clock() }); current(c).status = 'review'; c.status = 'result_review'; c.precheck = { checks: ['实际执行内容已填写', '验证依据已填写', '阶段与工作单一致', '提交人为团队成员'], warning: '完整性检查通过；原始记录和结果真实性仍需管理者复核。' }; event(c, who + '提交执行结果，已自动核对完整性', false);
+        c.submissions.push({ id: crypto.randomUUID(), taskKey: current(c).key, planVersion: current(c).planVersion, result, evidence, signature, author: who, files, createdAt: clock() }); current(c).status = 'review'; c.status = 'result_review'; c.precheck = { checks: ['实际执行内容已填写', '验证依据已填写', '阶段与工作单一致', '提交人为团队成员'], warning: '完整性检查通过；原始记录和结果真实性仍需管理者复核。' }; signed(who + '提交执行结果，已自动核对完整性');
       } else if (action === 'return') {
-        if (c.status !== 'result_review') fail('当前没有待复核提交'); const note = text(input.note, '退回意见', 5); c.submissions.at(-1).returnNote = note; c.returnNote = note; c.status = 'executing'; current(c).status = 'active'; event(c, author + '退回补充：' + note, false);
+        if (c.status !== 'result_review') fail('当前没有待复核提交'); const note = text(input.note, '退回意见', 5); signature.label = '退回补充'; signature.reason = note; c.submissions.at(-1).returnNote = note; c.submissions.at(-1).reviewSignature = signature; c.returnNote = note; c.status = 'executing'; current(c).status = 'active'; signed(author + '退回补充：' + note);
       } else fail('不支持的工作单操作', 404);
       sync(c); return clone(c);
     });
@@ -310,7 +334,7 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
   function groups() {
     const map = new Map(); for (const r of store.col('measurements').all()) { const ch = store.col('spcChars').get(r.charId); if (!ch || !Number.isFinite(r.value) || !Number.isFinite(ch.lsl) || !Number.isFinite(ch.usl) || ch.lsl >= ch.usl) continue; const key = JSON.stringify([r.charId, r.batch || '未标批次']); if (!map.has(key)) map.set(key, { key, ch, batch: r.batch || '未标批次', rows: [] }); map.get(key).rows.push(r); } return [...map.values()].map((g) => ({ ...g, rows: g.rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts))) }));
   }
-  function measurementDigest() { return hash(store.col('measurements').all().map((r) => [r.id, r.charId, r.batch, r.value, r.ts, r.subgroup])); }
+  function measurementDigest() { return store.measurementRevision; }
   function scan(reason = '立即筛查') {
     if (scanning) return summary(); scanning = true;
     try {
@@ -564,8 +588,12 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
       if(row.qmsDocId){const doc=store.getSetting('qmsDocs',[]).find((d)=>d.id===row.qmsDocId);if(doc){doc.content=outputs;doc.title=title;doc.updatedAt=clock();}}
       event(null,'已人工修订分析草稿：'+title,false);return clone(row); });
   }
-  function addFile(id, input) {
+  function addFile(id, input, principal = null) {
     requireObject(input); const c = resolve(id); version(c, input); if (c.status === 'closed') fail('已归档工作单不可追加附件');
+    if (principal?.role === 'worker') {
+      if (c.status !== 'executing') fail('仅执行中的任务可以上传执行证据',403);
+      verifyAssignee(c, principal);
+    }
     if (c.files.length >= 8) fail('每张工作单最多 8 个附件');
     const filename = text(input.filename, '文件名', 1, 180).replace(/\\/g, '/').split('/').at(-1), ext = path.extname(filename).toLowerCase();
     if (!['.pdf', '.png', '.jpg', '.jpeg', '.txt', '.csv', '.json', '.xlsx', '.docx'].includes(ext)) fail('附件仅支持 PDF、图片、文本、CSV、JSON、Word 与 Excel');
@@ -573,10 +601,10 @@ function createEngine({ store, outputDir, runtime = {}, clock = now }) {
     const bytes = Buffer.from(input.base64, 'base64'); if (!bytes.length || bytes.length > 5 * 1024 * 1024) fail('附件为空或超过 5 MB');
     const fileId = crypto.randomUUID(), folder = path.join(outputDir, 'evidence'), storageName = fileId + ext;
     fs.mkdirSync(folder, { recursive: true }); const target = path.join(folder, storageName); fs.writeFileSync(target, bytes, { flag: 'wx' });
-    try { return tx(() => { const f = { id: fileId, filename, storageName, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), at: clock() }; c.files.push(f); event(c, '已保存原始附件：' + filename, false); return { file: clone(f), version: c.version }; }); }
+    try { return tx(() => { const f = { id: fileId, filename, storageName, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), at: clock(), ...(principal ? { uploader: principal.name, uploaderId: principal.memberId, delegatedFor: principal.actingFor?.memberId } : {}) }; c.files.push(f); event(c, '已保存原始附件：' + filename, false); return { file: clone(f), version: c.version }; }); }
     catch (err) { fs.unlinkSync(target); throw err; }
   }
-  function getFile(id, fileId) { const c = resolve(id), f = c.files.find((v) => v.id === fileId); if (!f) fail('附件不存在', 404); return { ...f, path: path.join(outputDir, 'evidence', f.storageName) }; }
+  function getFile(id, fileId) { const c = resolve(id), f = c.files.find((v) => v.id === fileId); if (!f || !/^[a-f0-9-]{36}\.(pdf|png|jpe?g|txt|csv|json|xlsx|docx)$/.test(f.storageName)) fail('附件不存在', 404); return { ...f, path: path.join(outputDir, 'evidence', f.storageName) }; }
   function requestDraft(id, input) {
     const c = resolve(id); version(c, input); if (!['plan_review', 'needs_info'].includes(c.status)) fail('只可为尚未批准的方案起草');
     if (!runtime.model || !runtime.llm) fail('Harness 尚未连接可用模型；本地规则草稿仍可调整和批准');

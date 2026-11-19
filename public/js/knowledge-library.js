@@ -13,10 +13,11 @@
   };
   const storageSummary = (storage) => storage ? '已保存原文件 ' + size(storage.usedBytes) + ' · 本机可用空间约 ' + size(storage.availableBytes) : '';
   const download = (id) => base + '/' + encodeURIComponent(id) + '/download';
+  const versionLabel = (doc) => doc.revisionState === 'uncontrolled' ? '未登记版次' : doc.revisionState === 'draft' ? '待发布' : doc.revisionState === 'cancelled' ? '已取消发布' : doc.revisionState === 'withdrawn' ? '已停用' : doc.effective ? '当前有效' : doc.effectiveFrom > new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Shanghai'}) ? '待生效' : '历史版';
   const status = { queued: '等待解析', processing: '正在解析', ready: '可检索', failed: '解析失败' };
 
   function sourceButton(ref, text) {
-    return act(text || '[' + ref.number + '] ' + ref.name + ' · ' + ref.label, 'librarySource', { id: ref.documentId, part: ref.part }, 'btn btn-sm library-cite');
+    return act(text || '[' + ref.number + '] ' + ref.name + (ref.revision ? ' · ' + ref.revision + ' 版' : '') + ' · ' + ref.label, 'librarySource', { id: ref.documentId, part: ref.part }, 'btn btn-sm library-cite');
   }
 
   async function showSource({ id, part }) {
@@ -30,15 +31,16 @@
 
   function table(documents) {
     if (!documents.length) return '<div class="library-empty"><strong>文件库还是空的</strong><p>从企业简介、产品目录、质量手册或作业指导书开始，就能在 AI 工作助手按原文问答。</p></div>';
-    return `<div class="op-table-wrap"><table class="op-table"><thead><tr><th>文件</th><th>状态</th><th>片段</th><th>操作</th></tr></thead><tbody>${documents.map((doc) =>
+    return `<div class="op-table-wrap"><table class="op-table"><thead><tr><th>文件</th><th>状态</th><th>版次与适用范围</th><th>操作</th></tr></thead><tbody>${documents.map((doc) =>
       `<tr><td><strong>${esc(doc.name)}</strong><small>${esc(size(doc.size))} · ${esc(dt(doc.createdAt))}</small></td>
         <td><span class="library-status" data-state="${esc(doc.status)}">${esc(status[doc.status] || doc.status)}</span>
         ${doc.error ? '<small>' + esc(doc.error) + '</small>' : ''}
         ${doc.vectorStatus === 'ready' ? '<small>关键词和向量</small>' : doc.vectorStatus === 'failed' ? '<small>向量化失败，可继续关键词检索</small>' : ''}</td>
-        <td>${doc.chunkCount}</td><td><div class="op-actions">
+        <td><b>${esc(doc.documentNumber || '')} ${esc(doc.revision || '')}</b><small>${esc(versionLabel(doc))}${doc.effectiveFrom?' · '+esc(doc.effectiveFrom):''}</small><small>${esc([doc.product,doc.process].filter(Boolean).join(' · '))}</small></td><td><div class="op-actions">
           <a class="btn btn-sm" href="${download(doc.id)}">下载</a>
           ${doc.status === 'failed' || doc.status === 'ready' ? act('重新索引', 'libraryRetry', { id: doc.id }, 'btn btn-sm') : ''}
-          ${act('移除', 'libraryDelete', { id: doc.id, name: doc.name }, 'btn btn-sm')}
+          ${global.Signing.canManage() && !['released','withdrawn','cancelled'].includes(doc.revisionState) ? `<button class="btn btn-sm" data-library-version="${esc(doc.id)}">登记版次</button>` + act('移除', 'libraryDelete', { id: doc.id, name: doc.name }, 'btn btn-sm') : ''}
+          ${global.Signing.canManage() && doc.revisionState==='released' ? `<button class="btn btn-sm" data-library-version="${esc(doc.id)}" data-withdraw>停用</button>` : ''}
         </div></td></tr>`).join('')}</tbody></table></div>`;
   }
 
@@ -63,7 +65,7 @@
       <div id="libraryNotice" class="library-notice" role="status"></div>
       <div class="library-layout"><section class="card"><div class="card-hd"><span class="t">已上传文件</span><span class="s" id="libraryCount">${data.documents.length} 个</span></div><div id="libraryDocuments">${table(data.documents)}</div></section>
       <aside class="card"><div class="card-hd"><span class="t">检索原文</span></div>
-        <form id="librarySearch" class="library-search"><label>文件名、产品、工序或关键词<input class="inp" name="query" required maxlength="500" placeholder="例如：进料检验抽样规则"></label><button class="btn" type="submit">检索</button></form>
+        <form id="librarySearch" class="library-search"><label>文件名、产品、工序或关键词<input class="inp" name="query" required maxlength="500" placeholder="例如：进料检验抽样规则"></label><label>产品（选填）<input class="inp" name="product" maxlength="80"></label><label>工序（选填）<input class="inp" name="process" maxlength="80"></label><button class="btn" type="submit">检索有效资料</button></form>
         <div id="libraryHits"></div>
         <p class="library-tip" id="libraryStorage">${esc(storageSummary(data.storage))}</p>
         <p class="library-tip">支持 TXT、Markdown、CSV、DOCX、XLSX${data.formats.includes('.pdf') ? '、有文字层的 PDF' : ''}。原文件与索引保存在本机，可用空间会随磁盘使用变化。正文过大时可下载原文件，把正文拆分成几份再上传。问答或资料提取只转交相关片段给 Harness 当前配置的模型。</p>
@@ -122,7 +124,7 @@
         button.disabled = true;
         hits.textContent = '检索中…';
         try {
-          const { excerpts } = await API.get(base + '/search', { q });
+          const { excerpts } = await API.get(base + '/search', { q, product:form.elements.product.value.trim(), process:form.elements.process.value.trim() });
           hits.innerHTML = excerpts.length ? excerpts.map((ref) => `<article class="library-hit">${sourceButton(ref, ref.name + ' · ' + ref.label)}
             <p>${esc(ref.content.slice(0, 220))}${ref.content.length > 220 ? '…' : ''}</p></article>`).join('') : '<p class="library-tip">没有找到匹配片段。</p>';
         } catch (error) { hits.textContent = error.message; }
@@ -158,6 +160,36 @@
       } catch (error) { toast(error.message, 'err'); event.target.disabled = false; }
     };
   }
+  document.addEventListener('click', (event)=>{
+    const button=event.target.closest('[data-library-version]');
+    if (button) changeVersion(button.dataset.libraryVersion, button.hasAttribute('data-withdraw')).catch((error)=>toast(error.message,'err'));
+  });
+  async function changeVersion(id, withdraw) {
+    const {documents}=await API.get(base);
+    const doc=documents.find((row)=>row.id===id);
+    if (!doc) throw Error('文件不存在');
+    const controls=[['documentNumber','文件编号','text'],['revision','版次','text'],['product','适用产品','text'],
+      ['process','适用工序','text'],['effectiveFrom','生效日期','date']].map(([key,label,type]) =>
+      `<label class="op-field">${label}<input class="inp" name="${key}" type="${type}" value="${esc(doc[key] || '')}"></label>`).join('');
+    const choices=documents.filter((row)=>row.id!==id && ['released','withdrawn'].includes(row.revisionState));
+    const replacement=`<label class="op-field">替代的旧版<select class="inp" name="supersedes"><option value="">首次发布</option>${choices.map((row)=>
+      `<option value="${esc(row.id)}" ${doc.supersedes===row.id?'selected':''}>${esc([row.documentNumber,row.revision,row.product,row.process].filter(Boolean).join(' · '))}</option>`).join('')}</select></label>`;
+    const box=modal({title:withdraw?'停用已发布文件':'登记文件版次',sub:doc.name,
+      body:`<form class="op-form">${withdraw?'<p class="full">停用后从日常检索移除，工作单和历史引用仍可打开原文。</p>':controls+replacement}
+        <p class="op-error full" role="alert"></p><div class="op-actions full">${withdraw?'<button class="btn btn-primary" value="withdrawn">确认停用</button>':
+          '<button class="btn" value="draft">保存草稿</button><button class="btn btn-primary" value="released">发布版次</button>'}</div></form>`});
+    const form=box.querySelector('form');
+    form.onsubmit=async(event)=>{
+      event.preventDefault();
+      const b=event.submitter;
+      b.disabled=true;
+      try {
+        await API.put(base+'/'+encodeURIComponent(id)+'/version',{...Object.fromEntries(new FormData(form)),revisionState:b.value});
+        closeModal(); changed(); toast('文件版次已更新','ok');
+      } catch(error) { form.querySelector('[role=alert]').textContent=error.message; }
+      finally {b.disabled=false;}
+    };
+  }
   async function retry({ id }) {
     await API.post(base + '/' + encodeURIComponent(id) + '/retry');
     changed();
@@ -169,7 +201,7 @@
   async function openSuggestions(target, opts) {
     const { documents } = await API.get(base);
     if (!opts.isCurrent()) return;
-    const ready = documents.filter((row) => row.status === 'ready');
+    const ready = documents.filter((row) => row.status === 'ready' && row.effective);
     if (!ready.length) {
       modal({
         title: '从知识库带入',
@@ -181,7 +213,7 @@
     const box = modal({
       title: target === 'naming' ? '从资料提取企业设置' : '从资料提取体系调研',
       sub: '只把选中的候选值填进表单，核对后再保存。已有非默认值需要手动勾选。',
-      body: `<form class="library-suggest-search"><label>检索范围<select class="inp" name="documentId"><option value="">全部已索引文件</option>${ready.map((d) =>
+      body: `<form class="library-suggest-search"><label>检索范围<select class="inp" name="documentId"><option value="">全部有效资料</option>${ready.map((d) =>
         '<option value="' + esc(d.id) + '">' + esc(d.name) + '</option>').join('')}</select></label><button type="submit" class="btn btn-primary">提取候选值</button></form>
         <div class="library-suggest-result" aria-live="polite"></div>`,
       footer: '<button type="button" class="btn btn-primary" data-use-suggestions disabled>填入选中的字段</button>',

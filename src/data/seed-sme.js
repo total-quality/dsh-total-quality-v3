@@ -95,7 +95,7 @@ function gauss(rand) {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-function seedSme(store) {
+function seedSme(store, { persist = true } = {}) {
   const now = new Date();
   const iso = (d) => d.toISOString();
   const dayAgo = (n, h) => new Date(now.getTime() - n * 86400000 + (h || 0) * 3600000);
@@ -304,7 +304,7 @@ function seedSme(store) {
     });
   }
 
-  store.saveSync(true);
+  if (persist) store.saveSync(true);
   return {
     scale: 'sme',
     issues: store.db.issues.length,

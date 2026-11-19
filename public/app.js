@@ -1295,6 +1295,7 @@ global.Scale = {
      启动
      ================================================================== */
   (async function boot() {
+    if (!await global.Signing.boot()) return;
     await loadBootstrap();
     global.QWizard.menu();
     const p = location.hash.slice(1) || 'runHub';
