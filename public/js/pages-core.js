@@ -96,8 +96,7 @@
             </div>
           </div>
         </div>
-      </div>
-      <div class="footer-note">${brand()} · AI 工作台</div>`;
+      </div>`;
     },
   };
 

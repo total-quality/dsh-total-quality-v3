@@ -4,8 +4,7 @@
   flex-direction: column;
   min-height: 0;
 }
-.content:has(> .wb-solo) > .ai-strip,
-.content:has(> .wb-solo) > .footer-note { flex: none; }
+.content:has(> .wb-solo) > .ai-strip { flex: none; }
 .wb.wb-solo { display: flex; flex: 1; align-items: stretch; min-height: 335px; }
 .wb-solo > .chat-wrap { flex: 1; height: auto; min-height: 0; min-width: 0; }
 .wb-solo .chat-body { min-height: 70px; }

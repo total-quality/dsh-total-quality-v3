@@ -42,7 +42,7 @@
 Web 版可用以下命令安装：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.17/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.18/dsh-total-quality-v3.tgz
 ```
 
 ## 业务场景
