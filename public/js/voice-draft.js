@@ -3,6 +3,7 @@
 
   const base = '/qip-real-v3/api/voice';
   const rate = 16000;
+  const maxSeconds = 45;
   let disposeCurrent;
 
   function resample(chunks, count, sourceRate, maxSeconds) {
@@ -41,19 +42,21 @@
     const meter = document.getElementById('chatVoiceMeter');
     if (!button || !input) return;
 
-    let current, tick, poll, closed = false;
+    let current, tick, closed = false;
     const canRecord = Boolean(global.isSecureContext && navigator.mediaDevices?.getUserMedia && global.AudioContext && global.AudioWorkletNode);
     const ui = (phase, message = '') => {
       button.dataset.phase = phase;
       button.setAttribute('aria-pressed',String(phase === 'recording'));
-      button.disabled = ['preparing','opening','processing'].includes(phase);
-      label.textContent = ({ preparing:'准备听写', opening:'开启麦克风', recording:'结束录音', processing:'正在转写' })[phase] || '语音听写';
-      cancelButton.hidden = !['preparing','opening','recording','processing'].includes(phase);
+      button.disabled = ['opening','processing'].includes(phase);
+      label.textContent = ({ opening:'开启麦克风', recording:'结束录音', processing:'正在转写' })[phase] || '语音听写';
+      cancelButton.hidden = !['opening','recording','processing'].includes(phase);
       meter.hidden = phase !== 'recording';
       status.dataset.phase = phase;
       status.textContent = message;
     };
     function release(capture) {
+      if (capture.released) return;
+      capture.released = true;
       clearInterval(tick);
       clearTimeout(capture.flushTimeout);
       capture.stream?.getTracks().forEach((track)=>track.stop());
@@ -64,7 +67,6 @@
       if (capture.context?.state !== 'closed') capture.context?.close().catch(() => {});
     }
     function cancel(message = '已取消听写') {
-      clearTimeout(poll);
       if (current) {
         const capture = current;
         current = null;
@@ -76,32 +78,18 @@
     async function request(url, options, signal) {
       const r = await fetch(base+url,{ ...options, signal, cache:'no-store' });
       const payload = await r.json().catch(() => null);
-      if (r.status === 404 && !url) throw Error('当前 Harness 尚未加载语音接口。请重启 Harness Web 后刷新页面。');
+      if (r.status === 404) throw Error('当前 Harness 尚未加载语音接口。请重启 Harness Web 后刷新页面。');
       if (!r.ok || !payload?.ok) throw Error(payload?.error || '语音服务暂不可用，请重试。');
       return payload;
     }
-    function startNew() {
-      return current = {
+    async function start() {
+      if (!canRecord) return ui('error','当前页面无法访问麦克风，请使用 localhost 或 HTTPS 下的新版浏览器。');
+      const capture = current = {
         abort:new AbortController(), chunks:[], count:0, rms:0,
         draft:input.value, cursor:input.selectionEnd,
       };
-    }
-    async function start() {
-      if (!canRecord) return ui('error','当前页面无法访问麦克风，请使用 localhost 或 HTTPS 下的新版浏览器。');
-      const capture = startNew();
-      let stage;
       try {
-        ui('preparing','正在检查本地听写模型…');
-        stage = await request('',{},capture.abort.signal);
-        if (current !== capture) return;
-        if (stage.phase !== 'ready') {
-          capture.prepareStarted = performance.now();
-          await request('/prepare',{method:'POST'},capture.abort.signal);
-          if (current === capture) showProgress(capture);
-          return;
-        }
-        capture.maxSeconds = stage.maxSeconds;
-        ui('opening','请允许访问麦克风。');
+        ui('opening','正在开启麦克风…');
         const stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true }, video:false });
         if (current !== capture) { stream.getTracks().forEach((track)=>track.stop()); return; }
         capture.stream = stream;
@@ -121,50 +109,46 @@
         capture.node.port.onmessage = ({data}) => onAudio(capture,data);
         capture.started = performance.now();
         ui('recording','正在录音 00:00');
+        capture.ready = prepare(capture).catch((error) => {
+          if (current === capture && !capture.stopping) {
+            cancel('');
+            ui('error',error.message);
+          }
+          return error;
+        });
         tick = setInterval(() => {
           const seconds = Math.floor((performance.now() - capture.started)/1000);
           const time = '正在录音 00:' + String(seconds).padStart(2,'0');
           if (status.textContent !== time) status.textContent = time;
-          if (seconds >= capture.maxSeconds) stop(capture);
+          if (seconds >= maxSeconds) stop(capture);
         },250);
       } catch (error) {
         if (current !== capture) return;
         cancel('');
         const hints = { NotAllowedError:'未取得麦克风权限，请在浏览器放行后重试。',
           NotFoundError:'没有找到可用麦克风。', NotReadableError:'麦克风暂不可用，请检查设备或其他录音应用。' };
-        ui('error',hints[error.name] || (stage?.phase === 'ready' ? '无法开启录音，请检查麦克风后重试。' : error.message));
+        ui('error',hints[error.name] || '无法开启录音，请检查麦克风后重试。');
       }
     }
-    async function showProgress(capture) {
-      try {
-        if (current !== capture) return;
-        const state = await request('',{},capture.abort.signal);
-        if (current !== capture) return;
-        if (state.phase === 'ready') {
-          current = null;
-          if (!capture.downloaded && performance.now() - capture.prepareStarted < 2500 && document.visibilityState === 'visible') {
-            void start();
-          } else ui('idle','本地模型已就绪，点击语音听写开始。');
-          return;
-        }
-        if (state.phase === 'error') throw Error(state.error);
-        if (state.phase === 'downloading') capture.downloaded = true;
-        const amount = state.total > 0 ? Math.min(100,Math.floor(state.received / state.total * 100))+'%' : '';
-        const message = state.phase === 'downloading' ? '首次下载中文听写模型（约 168 MB） ' + amount :
-          state.phase === 'warming' ? '正在启动本地听写引擎…' : '正在校验本地听写模型…';
-        ui('preparing',message);
-        poll = setTimeout(() => showProgress(capture),700);
-      } catch (error) {
-        if (current !== capture) return;
-        current = null;
-        ui('error',error.message);
+    async function prepare(capture) {
+      const signal = capture.abort.signal;
+      let state = await request('/prepare',{method:'POST'},signal);
+      while (current === capture && state.phase !== 'ready') {
+        if (state.phase === 'error') throw Error(state.error || '本地听写暂不可用，请重试。');
+        capture.preparing = state.phase === 'downloading'
+          ? '已录好，正在下载首次使用所需的中文识别模型。' : '已录好，正在启动本地听写…';
+        if (capture.processing) ui('processing',capture.preparing);
+        await new Promise((resolve) => setTimeout(resolve,700));
+        if (signal.aborted) return;
+        state = await request('',{},signal);
       }
+      capture.preparing = '';
     }
     function onAudio(capture,data) {
       if (current !== capture) return;
       if (data === 'finished') { void transcribe(capture); return; }
       if (!(data instanceof Float32Array)) return;
-      const capacity = capture.context.sampleRate * capture.maxSeconds;
+      const capacity = capture.context.sampleRate * maxSeconds;
       const available = Math.min(capacity - capture.count,data.length);
       if (available <= 0) return;
       const chunk = data.subarray(0,available);
@@ -180,7 +164,7 @@
       if (current !== capture || capture.stopping || !capture.node) return;
       capture.stopping = true;
       clearInterval(tick);
-      ui('processing','正在本机转写…');
+      ui('processing',capture.preparing || '正在整理录音…');
       capture.node.port.postMessage('finish');
       capture.flushTimeout = setTimeout(() => transcribe(capture),300);
     }
@@ -190,9 +174,14 @@
       const sourceRate = capture.context.sampleRate;
       release(capture);
       try {
-        const pcm = resample(capture.chunks,capture.count,sourceRate,capture.maxSeconds);
+        const pcm = resample(capture.chunks,capture.count,sourceRate,maxSeconds);
         capture.chunks = [];
         if (pcm.length < rate / 4) throw Error('录音太短，请再说一次。');
+        if (capture.preparing) ui('processing',capture.preparing);
+        const error = await capture.ready;
+        if (current !== capture) return;
+        if (error) throw error;
+        ui('processing','正在本机转写…');
         const result = await request('/transcribe',{ method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:pcm.buffer },capture.abort.signal);
         if (current !== capture || !input.isConnected) return;
         const text = String(result.text || '').trim();
@@ -203,6 +192,7 @@
       } catch (error) {
         if (current !== capture) return;
         current = null;
+        capture.abort.abort();
         ui('error',error.message);
       }
     }
@@ -211,7 +201,7 @@
       if (button.dataset.phase === 'recording') stop(current);
       else if (!current) void start();
     };
-    cancelButton.onclick = () => cancel(button.dataset.phase === 'preparing' ? '已返回输入框，模型可继续在后台下载。' : '已取消听写。');
+    cancelButton.onclick = () => cancel();
     global.addEventListener('pagehide',pageHide);
     disposeCurrent = () => { closed = true; cancel(''); global.removeEventListener('pagehide',pageHide); };
     ui('idle');
