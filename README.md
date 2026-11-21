@@ -15,7 +15,7 @@
 <p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
 
 <p align="center">
-  <a href="#项目概览">项目概览</a> · <a href="#快速上手">快速上手</a> · <a href="#业务场景">业务场景</a> · <a href="#功能特性">功能特性</a> · <a href="#自动化与人工确认">自动化与人工确认</a> · <a href="#使用资料">使用资料</a> · <a href="#版本发布">版本发布</a>
+  <a href="#项目概览">项目概览</a> · <a href="#快速上手">快速上手</a> · <a href="docs/enterprise-onboarding.md">企业部署与接入</a> · <a href="#业务场景">业务场景</a> · <a href="#功能特性">功能特性</a> · <a href="#使用资料">使用资料</a> · <a href="#版本发布">版本发布</a>
 </p>
 
 ## 项目概览
@@ -36,13 +36,13 @@
 ## 快速上手
 
 1. 在 DeepSeek Harness 的插件管理器，通过 [发布页](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) 下载并添加 `dsh-total-quality-v3.tgz`。装好后打开侧栏「全质开源质量平台2」。
-2. 在「确认与纠正」打开一张样例单，看看异常来自哪条测量、建议怎么处理、交给谁。批准后到「执行跟进」打开这张单，提交复测结果并查看复核入口。
-3. 想用自己的数据时，在「企业设置」填好公司、部门、车间和产品名称。从「接收与追溯」下载测量模板，填一批数据，核对预检结果后再确认接收。也可以直接录入一条正在处理的异常或客户反馈。切换到正式使用前，可先备份本机数据，再从「系统设置 → 数据管理」清空试用记录。
+2. 新数据目录默认使用空白台账。在「企业设置」填好公司、部门、车间和产品名称，到「员工成长中心」登记真实人员，再绑定首位质量主管账号。
+3. 从「接收与追溯」下载测量模板，先试导入一个批次。要接入企业现有的知识库，或在单独的目录体验样例工作单，可按 [企业部署与知识库接入指南](docs/enterprise-onboarding.md) 操作。
 
 Web 版可用以下命令安装：
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.18/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.19/dsh-total-quality-v3.tgz
 ```
 
 ## 业务场景
@@ -108,7 +108,8 @@ dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-
 
 ## 使用资料
 
-- [安装说明](安装说明.md)和插件内「使用指南」可以对照看。初次试用有样例工作单、测量 CSV 模板和自己的文件上传入口。
+- [安装说明](安装说明.md)和插件内「使用指南」可以对照看。试用场景可以在独立目录启用样例数据。
+- [企业部署与知识库接入](docs/enterprise-onboarding.md)包含空白启动、文档上传、接口示例和内网文件服务器、SharePoint、Confluence、自建文控系统的适配方式。
 - 当前版本在本机 Harness 中运行。业务记录、附件和上传原文件保存在本机，企业数据可以通过文件导入和站内表单提交。知识库可用空间随本机磁盘变化，页面会显示已保存的原文件大小和剩余可用空间。资料问答和表单提取会把相关原文片段交给所配置的模型。
 - [反馈问题或建议](https://github.com/total-quality/dsh-total-quality-v3/issues)时，可以附上使用场景、所在页面和操作步骤。
 

@@ -337,7 +337,7 @@ route('GET', /^\/api\/bootstrap$/, async (req, res) => {
   sendJson(res, 200, {
     ok: true,
     org: store.getSetting('org', {}),
-    hasSampleData: !store.db.meta.userCleared,
+    hasSampleData: store.db.meta.hasSampleData === true,
     brand: brandName(),
     scale: currentScale(),
     scales: SCALES,
@@ -1116,6 +1116,7 @@ route('POST', /^\/api\/data\/reset$/, async (req, res) => {
     store.db.auditArchive=archive;
     store.db.counters.audit=Math.max(store.db.counters.audit || 0,counter);
     store.db.meta.userCleared=false;
+    store.db.meta.hasSampleData=true;
     store.db.settings.llm={...(store.db.settings.llm || {}),...keep};
     store.db.settings.auditRetentionDays=days;
     store.audit({user:req.signer?.name || '本机使用者',plugin:'数据管理',action:'重建样例数据'});
@@ -1134,6 +1135,7 @@ route('POST', /^\/api\/data\/clear$/, async (req, res) => {
     cols.forEach((c) => { store.db[c] = []; });
     if (fullClear) {
       store.db.meta.userCleared = true;
+      store.db.meta.hasSampleData = false;
       delete store.db.meta.operationsLastScan;
       delete store.db.meta.operationsLastResult;
     }
@@ -1370,19 +1372,18 @@ function init() {
     const scale = currentScale();
     await store.init(DATA_DIR, { scale });
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-    const firstRun = store.isEmpty() && !store.db.meta.userCleared;
-    if (firstRun) {
-      if (scale === 'sme') {
-        const { seedSme } = require('./src/data/seed-sme');
-        const info = seedSme(store);
-        console.log('[qip-real-v3] 首次启动（中小型企业版），已灌入初始数据集：' + JSON.stringify(info));
-      } else {
-        const { seed } = require('./src/data/seed');
-        const info = seed(store);
-        store.saveSync(true);
-        console.log('[qip-real-v3] 首次启动，已灌入初始数据集：' + JSON.stringify(info));
-      }
-    } else if (scale !== 'sme') {
+    const firstRun = !store.hasExistingState;
+    const meta = store.db.meta;
+    if (firstRun && process.env.QIP_REAL_V3_SEED_DEMO === '1') {
+      const seed = scale === 'sme' ? require('./src/data/seed-sme').seedSme : require('./src/data/seed').seed;
+      const info = seed(store, { persist: false });
+      meta.hasSampleData = true;
+      console.log('[qip-real-v3] 已载入独立演示数据集：' + JSON.stringify(info));
+    } else if (meta.hasSampleData === undefined) {
+      // Older releases only recorded the seed's scale or the explicit clear flag.
+      meta.hasSampleData = !firstRun && !meta.userCleared && (meta.scale === 'sme' || meta.dataScaleIssues === 10);
+    }
+    if (!firstRun && scale !== 'sme' && meta.hasSampleData && !meta.userCleared) {
       // 既有实例：把问题库一次性扩到 10 倍（幂等，靠 meta.dataScaleIssues 打标）
       const { scaleupIssues } = require('./src/data/seed');
       const up = scaleupIssues(store);

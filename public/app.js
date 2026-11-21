@@ -1171,14 +1171,14 @@ global.Scale = {
       input.click();
     },
     resetData: () => modal({
-      width: 'narrow', title: '重建初始数据', sub: '会清空所有业务数据（保留模型配置）',
+      width: 'narrow', title: '重建样例数据', sub: '用于单独的演示环境，会替换现有业务记录',
       body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 该操作会清空问题库、项目、测量数据、知识库等全部业务数据，并重新生成样例数据，无法恢复已清空的真实记录。模型配置会保留。</div>',
       footer: `${act('取消', '__closeModal', {}, 'btn')}${act('确认重建', 'resetDataDo', {}, 'btn btn-primary')}`,
     }),
-    resetDataDo: async () => { await API.post('/qip-real-v3/api/data/reset', {}); closeModal(); toast('初始数据已重建', 'ok'); await loadBootstrap(); refresh(); },
+    resetDataDo: async () => { await API.post('/qip-real-v3/api/data/reset', {}); closeModal(); toast('样例数据已重建', 'ok'); await loadBootstrap(); refresh(); },
     clearData: () => modal({
       width: 'narrow', title: '清空业务数据', sub: '用于导入真实数据前的清场',
-      body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 将清空全部业务数据（不含人员与系统设置），之后页面会显示空状态。「重建初始数据」仅重新生成样例数据，无法恢复已清空的真实记录。</div>',
+      body: '<div style="font-size:12.5px;color:#c8620a;line-height:1.9;">⚠ 将清空业务记录，保留人员、系统设置和上传的知识库文件。请先创建备份。恢复真实记录需要业务备份。</div>',
       footer: `${act('取消', '__closeModal', {}, 'btn')}${act('确认清空', 'clearDataDo', {}, 'btn btn-primary')}`,
     }),
     clearDataDo: async () => { await API.post('/qip-real-v3/api/data/clear', {}); closeModal(); toast('已清空', 'ok'); await loadBootstrap(); refresh(); },

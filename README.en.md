@@ -36,13 +36,13 @@ Consider a batch of bushings with an oversize outside diameter. Measurements are
 ## Quick Start
 
 1. Download `dsh-total-quality-v3.tgz` from the [latest release](https://github.com/total-quality/dsh-total-quality-v3/releases/latest) and add it in the DeepSeek Harness plugin manager. Open **全质开源质量平台2** in the sidebar.
-2. Open a sample work order in **确认与纠正** (Review and Correct). Check which measurements triggered it, review the plan, and approve it. Find the same order in **执行跟进** (Execution Follow-up) to try submitting and reviewing a reinspection result.
-3. When you are ready to use your own data, enter your company, departments, workshops, and products in **企业设置** (Company Settings). Download the measurement template from **接收与追溯** (Intake and Traceability), fill it with one lot's results, and review the import preview. You can also start by logging a current shop-floor issue or complaint. Before switching to production use, back up local data and clear the trial records in **System Settings → Data Management**.
+2. A fresh data directory starts with empty ledgers. Enter your company, departments, workshops, and products in **企业设置** (Company Settings). Add employees and enroll the first quality manager before assigning work.
+3. Download the measurement template from **接收与追溯** (Intake and Traceability) and use one lot to verify the import. See the [enterprise onboarding and knowledge-base guide](docs/enterprise-onboarding.md) for file upload, the import API, and a separate directory with optional demo data.
 
 For the web profile, you can also install from a terminal:
 
 ```sh
-dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.18/dsh-total-quality-v3.tgz
+dsh plugin --profile web add https://github.com/total-quality/dsh-total-quality-v3/releases/download/v3.0.19/dsh-total-quality-v3.tgz
 ```
 
 ## Use Cases

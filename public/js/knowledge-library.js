@@ -61,6 +61,7 @@
       return `<section class="library-hero"><div><span>企业资料</span><h1>知识库文件</h1><p>质量手册、产品目录、作业规范随用随传。入库后可在 AI 工作助手按原文提问。</p></div><div class="op-actions">
         <label class="btn btn-primary library-upload">上传文件<input id="libraryUpload" type="file" multiple accept="${esc(data.formats.join(','))}"></label>
         ${act('在助手里查', 'libraryChat', {}, 'btn')}
+        <a class="btn" href="https://github.com/total-quality/dsh-total-quality-v3/blob/main/docs/enterprise-onboarding.md" target="_blank" rel="noopener noreferrer">企业接入指南</a>
       </div></section>
       <div id="libraryNotice" class="library-notice" role="status"></div>
       <div class="library-layout"><section class="card"><div class="card-hd"><span class="t">已上传文件</span><span class="s" id="libraryCount">${data.documents.length} 个</span></div><div id="libraryDocuments">${table(data.documents)}</div></section>

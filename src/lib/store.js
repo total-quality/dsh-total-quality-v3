@@ -89,9 +89,10 @@ class Store {
       console.error('[store] SQLite 不可用，退回 JSON 存储：' + (err && err.message));
     }
     const persisted = this.persist ? this.persist.load() : null;
+    this.hasExistingState = !!persisted || fs.existsSync(this.file);
     if (persisted) {
       this.db = Object.assign(JSON.parse(JSON.stringify(DEFAULT_DB)), persisted);
-    } else if (fs.existsSync(this.file)) {
+    } else if (this.hasExistingState) {
       try {
         const raw = fs.readFileSync(this.file, 'utf8');
         const parsed = JSON.parse(raw);
@@ -106,11 +107,6 @@ class Store {
     }
     if (!this.db.meta.createdAt) this.db.meta.createdAt = new Date().toISOString();
     return this;
-  }
-
-  /** 是否已有业务数据（用于首启动时灌入初始数据） */
-  isEmpty() {
-    return (this.db.issues || []).length === 0 && (this.db.knowledge || []).length === 0;
   }
 
   // ---------------- 基础读写 ----------------

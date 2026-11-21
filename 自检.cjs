@@ -44,6 +44,7 @@ console.log('\n[3/4] 建库与统计引擎（临时目录，不影响您的正�
 (async () => {
   const tmp = path.join(os.tmpdir(), 'qip-selftest-' + Date.now());
   process.env.QIP_REAL_V3_DATA_DIR = tmp;
+  process.env.QIP_REAL_V3_SEED_DEMO = '1';
   try {
     const host = require(path.join(HERE, 'host.cjs'));
     await host.init();

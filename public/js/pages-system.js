@@ -111,7 +111,7 @@
           ${act('导入 BOM', 'importFile', { target: 'bom' }, 'btn')}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${act('重建初始数据', 'resetData', {}, 'btn')}
+          ${act('重建样例数据', 'resetData', {}, 'btn')}
           ${act('清空业务数据（保留模型配置）', 'clearData', {}, 'btn')}
         </div>
         <div style="font-size:11.5px;color:#8791a5;margin-top:10px;line-height:1.9;">
